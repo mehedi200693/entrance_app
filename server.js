@@ -1,3 +1,4 @@
+console.log("মাল্টি-সমিতি ব্যাকএন্ড সার্ভার চালু হচ্ছে...");
 const express = require('express');
 const mysql = require('mysql2');
 const cors = require('cors');
@@ -13,7 +14,7 @@ const db = mysql.createPool({
     port: '17828',
     user: 'avnadmin',      
     password: 'AVNS_sCS8XkTeBd3b9lqDTff',      
-    database: '',
+    database: 'defaultdb',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
@@ -49,12 +50,14 @@ const sanitizeData = (results) => {
     }));
 };
 
-// 🔐 ১. মাল্টি-কোম্পানি লগইন API
 app.post('/api/login', (req, res) => {
     const { username, password } = req.body;
     const sql = "SELECT company_id, username, name, role FROM users WHERE username = ? AND password = ? AND status = 'Active'";
     db.query(sql, [username, password], (err, results) => {
-        if (err) return res.status(500).json({ error: "সার্ভার এরর!" });
+        if (err) {
+            console.log("Login Database Error: ", err); // রেন্ডারের লগে দেখাবে
+            return res.status(500).json({ error: "সার্ভার এরর: " + err.message }); // অ্যাপের স্ক্রিনে আসল এরর দেখাবে
+        }
         if (results.length === 0) return res.status(401).json({ error: "ইউজার আইডি বা পাসওয়ার্ড ভুল!" });
         res.status(200).json({ message: "সফল লগইন", user: results[0] });
     });
@@ -722,5 +725,6 @@ app.get('/api/manager-live-analytics', (req, res) => {
     });
 });
 
-const PORT = 3000;
+// Render এবং লোকাল দুই জায়গাতেই যেন কাজ করে তাই ডাইনামিক পোর্ট বসানো হলো
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`মাল্টি-সমিতি ব্যাকএন্ড সার্ভার চালু হয়েছে পোর্ট: ${PORT}`));
