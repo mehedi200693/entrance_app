@@ -63,6 +63,24 @@ app.post('/api/login', (req, res) => {
     });
 });
 
+// 🔢 নতুন সদস্যের সিরিয়াল আইডি (১০০১, ১০০২...) তৈরি করার API
+app.get('/api/get-next-member-id', (req, res) => {
+    // মেম্বার টেবিল থেকে সবচেয়ে বড় আইডিটি খুঁজে আনবে
+    const sql = "SELECT id FROM members ORDER BY CAST(id AS UNSIGNED) DESC LIMIT 1";
+    
+    db.query(sql, (err, results) => {
+        if (err) return res.status(500).json({ error: "ডাটাবেজ এরর" });
+        
+        let nextId = 1001; // যদি ডাটাবেজে কোনো মেম্বার না থাকে, তবে ১০০১ থেকে শুরু হবে
+        
+        if (results.length > 0 && !isNaN(results[0].id)) {
+            nextId = parseInt(results[0].id) + 1; // শেষের আইডির সাথে ১ যোগ হবে
+        }
+        
+        res.status(200).json({ next_id: nextId.toString() });
+    });
+});
+
 // 📅 ২. সিস্টেম তারিখ জানার API 
 app.get('/api/get-system-date', (req, res) => {
     let companyId = req.query.company_id || 'COM101'; // 💡 ফিক্স: ডিফল্ট COM101
@@ -390,22 +408,32 @@ app.post('/api/lock-collection', (req, res) => {
     });
 });
 
-// 🔄 ৯. পরবর্তী দিন আপডেট 
+// 🔄 ৯. পরবর্তী দিন আপডেট (মডিফাইড ভার্সন)
 app.post('/api/next-day-update', (req, res) => {
-    const { company_id, next_date } = req.body; 
-    let cid = company_id || 'COM101';
+    let { company_id, next_date } = req.body; 
+    let cid = company_id || '101'; // ডিফল্ট আইডি 101 ধরবে
+
+    console.log("Update requested for Company ID:", cid); // এটি কনসোলে দেখা যাবে
 
     const checkCurrentDateSql = "SELECT DATE_FORMAT(system_date, '%Y-%m-%d') as current_system_date FROM system_settings WHERE company_id = ?";
     
     db.query(checkCurrentDateSql, [cid], (checkErr, checkResults) => {
-        if (checkErr || checkResults.length === 0) return res.status(500).json({ error: "সিস্টেম তারিখ যাচাই করা যায়নি।" });
+        if (checkErr) {
+            console.error("Database Error:", checkErr);
+            return res.status(500).json({ error: "ডাটাবেজ কানেকশন এরর।" });
+        }
+        
+        if (checkResults.length === 0) {
+            console.error("No record found for ID:", cid);
+            return res.status(404).json({ error: `সিস্টেম তারিখ পাওয়া যায়নি (ID: ${cid})। আপনার ডাটাবেজে কোম্পানি আইডি চেক করুন।` });
+        }
 
         const currentSystemDate = checkResults[0].current_system_date;
 
         if (next_date) {
             const currentSec = new Date(currentSystemDate).getTime();
             const nextSec = new Date(next_date).getTime();
-            if (nextSec <= currentSec) return res.status(400).json({ error: `ডেট ব্যাক হতে পারবে না।` });
+            if (nextSec <= currentSec) return res.status(400).json({ error: `ডেট আগের তারিখের হতে পারবে না।` });
         }
 
         const updateAbsentSql = `UPDATE active_loans SET accumulatedDue = accumulatedDue + targetToday WHERE isSavedToday = 'false' AND status = 'Active' AND type != 'Savings Only' AND company_id = ?`;
@@ -428,7 +456,8 @@ app.post('/api/next-day-update', (req, res) => {
                         params = [cid];
                     }
                     
-                    db.query(updateDateSql, params, () => {
+                    db.query(updateDateSql, params, (dateErr) => {
+                        if(dateErr) return res.status(500).json({error: "তারিখ আপডেট ব্যর্থ!"});
                         res.status(200).json({ message: "সফলভাবে ডে-ইন সম্পন্ন হয়েছে!" });
                     });
                 });
@@ -436,7 +465,6 @@ app.post('/api/next-day-update', (req, res) => {
         });
     });
 });
-
 // 🛠️ ১০. ডে-এন্ড ছাড়াই এমার্জেন্সি সিস্টেম ডেট পরিবর্তনের জন্য
 app.post('/api/set-system-date', (req, res) => {
     const { company_id, target_date } = req.body; 
@@ -722,6 +750,69 @@ app.get('/api/manager-live-analytics', (req, res) => {
     db.query(loanSummarySql, (err, results) => {
         if (err) return res.status(500).json({ success: false });
         res.json({ success: true, data: { loanSummary: results[0] } });
+    });
+});
+
+// 📑 ১. ম্যানেজারের নতুন আয়/ব্যয় (ভাউচার) এন্ট্রি করার API
+app.post('/api/add-office-transaction', (req, res) => {
+    const { company_id, date, transaction_type, category, amount, description } = req.body;
+    
+    const sql = `INSERT INTO office_transactions (company_id, date, transaction_type, category, amount, description) 
+                 VALUES (?, ?, ?, ?, ?, ?)`;
+                 
+    db.query(sql, [company_id, date, transaction_type, category, amount, description], (err, result) => {
+        if (err) return res.status(500).json({ error: "ডাটাবেজ এরর, ট্রানজেকশন সেভ হয়নি।" });
+        res.status(200).json({ success: true, message: "ট্রানজেকশন সফলভাবে সেভ হয়েছে!" });
+    });
+});
+
+// 📊 ২. দৈনিক ক্যাশের সামারি দেখার API (লাইভ হিসাব ক্যালকুলেট করবে)
+app.get('/api/get-daily-cash-summary', (req, res) => {
+    const { company_id, date } = req.query;
+
+    // ক) আগের দিনের ক্লোজিং ব্যালেন্স খুঁজবে (যা আজকের ওপেনিং)
+    const sqlOpening = `SELECT closing_balance FROM daily_cash_closings 
+                        WHERE company_id = ? AND date < ? ORDER BY date DESC LIMIT 1`;
+
+    // খ) আজকের মোট আয় ও ব্যয় যোগ করবে
+    const sqlSummary = `SELECT 
+                        SUM(CASE WHEN transaction_type = 'Income' THEN amount ELSE 0 END) as total_income,
+                        SUM(CASE WHEN transaction_type = 'Expense' THEN amount ELSE 0 END) as total_expense
+                        FROM office_transactions WHERE company_id = ? AND date = ?`;
+
+    db.query(sqlOpening, [company_id, date], (err, openingRes) => {
+        if (err) return res.status(500).json({ error: "ওপেনিং ব্যালেন্স লোড করা যায়নি।" });
+        
+        let openingBalance = openingRes.length > 0 ? parseFloat(openingRes[0].closing_balance) : 0.0;
+
+        db.query(sqlSummary, [company_id, date], (err, summaryRes) => {
+            if (err) return res.status(500).json({ error: "সামারি লোড করা যায়নি।" });
+
+            let totalIncome = summaryRes[0].total_income ? parseFloat(summaryRes[0].total_income) : 0.0;
+            let totalExpense = summaryRes[0].total_expense ? parseFloat(summaryRes[0].total_expense) : 0.0;
+            let closingBalance = (openingBalance + totalIncome) - totalExpense;
+
+            res.status(200).json({
+                opening_balance: openingBalance,
+                total_income: totalIncome,
+                total_expense: totalExpense,
+                closing_balance: closingBalance
+            });
+        });
+    });
+});
+
+// 🔒 ৩. দিন শেষে ক্যাশ ক্লোজ/লক করার API
+app.post('/api/close-day-cash', (req, res) => {
+    const { company_id, date, opening_balance, total_income, total_expense, closing_balance } = req.body;
+
+    const sql = `INSERT INTO daily_cash_closings (company_id, date, opening_balance, total_income, total_expense, closing_balance, is_closed) 
+                 VALUES (?, ?, ?, ?, ?, ?, 1) 
+                 ON DUPLICATE KEY UPDATE opening_balance=?, total_income=?, total_expense=?, closing_balance=?, is_closed=1`;
+
+    db.query(sql, [company_id, date, opening_balance, total_income, total_expense, closing_balance, opening_balance, total_income, total_expense, closing_balance], (err, result) => {
+        if (err) return res.status(500).json({ error: "ডে-ক্লোজ করা সম্ভব হয়নি।" });
+        res.status(200).json({ success: true, message: "আজকের ক্যাশ সফলভাবে বন্ধ (Lock) করা হয়েছে!" });
     });
 });
 
