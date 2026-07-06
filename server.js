@@ -753,66 +753,110 @@ app.get('/api/manager-live-analytics', (req, res) => {
     });
 });
 
-// 📑 ১. ম্যানেজারের নতুন আয়/ব্যয় (ভাউচার) এন্ট্রি করার API
-app.post('/api/add-office-transaction', (req, res) => {
-    const { company_id, date, transaction_type, category, amount, description } = req.body;
-    
-    const sql = `INSERT INTO office_transactions (company_id, date, transaction_type, category, amount, description) 
-                 VALUES (?, ?, ?, ?, ?, ?)`;
-                 
-    db.query(sql, [company_id, date, transaction_type, category, amount, description], (err, result) => {
-        if (err) return res.status(500).json({ error: "ডাটাবেজ এরর, ট্রানজেকশন সেভ হয়নি।" });
-        res.status(200).json({ success: true, message: "ট্রানজেকশন সফলভাবে সেভ হয়েছে!" });
-    });
-});
-
-// 📊 ২. দৈনিক ক্যাশের সামারি দেখার API (লাইভ হিসাব ক্যালকুলেট করবে)
+// 📊 দৈনিক ক্যাশের লাইভ সামারি এবং প্রতিটি সদস্যের ডিটেইলস হিস্টোরি (আপডেটেড)
 app.get('/api/get-daily-cash-summary', (req, res) => {
     const { company_id, date } = req.query;
 
-    // ক) আগের দিনের ক্লোজিং ব্যালেন্স খুঁজবে (যা আজকের ওপেনিং)
-    const sqlOpening = `SELECT closing_balance FROM daily_cash_closings 
-                        WHERE company_id = ? AND date < ? ORDER BY date DESC LIMIT 1`;
+    // ১. আগের দিনের ক্লোজিং ব্যালেন্স 
+    const sqlOpening = `SELECT closing_balance FROM daily_cash_closings WHERE company_id = ? AND date < ? ORDER BY date DESC LIMIT 1`;
 
-    // খ) আজকের মোট আয় ও ব্যয় যোগ করবে
-    const sqlSummary = `SELECT 
-                        SUM(CASE WHEN transaction_type = 'Income' THEN amount ELSE 0 END) as total_income,
-                        SUM(CASE WHEN transaction_type = 'Expense' THEN amount ELSE 0 END) as total_expense
-                        FROM office_transactions WHERE company_id = ? AND date = ?`;
+    // ২. মাঠের আদায় (ভিডিও অনুযায়ী collections টেবিল থেকে)
+    const sqlCollections = `SELECT member_name, installment_collected, savings_collected FROM collections WHERE collection_date = ?`;
+
+    // ৩. ঋণ বিতরণ (active_loans টেবিল থেকে)
+    const sqlDisbursements = `SELECT name, disburseAmount FROM active_loans WHERE company_id = ? AND disburseDate = ?`;
+
+    // ৪. সঞ্চয় উত্তোলন (ভিডিও অনুযায়ী loan_history টেবিল থেকে)
+    const sqlWithdrawals = `SELECT member_id, gs_w FROM loan_history WHERE company_id = ? AND date = ? AND type = 'সঞ্চয় উত্তোলন'`;
+
+    // ৫. অফিসের বিবিধ আয়/ব্যয় (office_transactions টেবিল থেকে)
+    const sqlOfficeTx = `SELECT transaction_type, category, amount FROM office_transactions WHERE company_id = ? AND date = ?`;
 
     db.query(sqlOpening, [company_id, date], (err, openingRes) => {
-        if (err) return res.status(500).json({ error: "ওপেনিং ব্যালেন্স লোড করা যায়নি।" });
-        
         let openingBalance = openingRes.length > 0 ? parseFloat(openingRes[0].closing_balance) : 0.0;
 
-        db.query(sqlSummary, [company_id, date], (err, summaryRes) => {
-            if (err) return res.status(500).json({ error: "সামারি লোড করা যায়নি।" });
+        db.query(sqlCollections, [date], (err, collRes) => {
+            let incomeDetails = [];
+            let fieldCollectionTotal = 0.0;
 
-            let totalIncome = summaryRes[0].total_income ? parseFloat(summaryRes[0].total_income) : 0.0;
-            let totalExpense = summaryRes[0].total_expense ? parseFloat(summaryRes[0].total_expense) : 0.0;
-            let closingBalance = (openingBalance + totalIncome) - totalExpense;
+            // কোন সদস্য কত টাকা দিল তার লিস্ট তৈরি
+            if (collRes && !err) {
+                collRes.forEach(row => {
+                    let kisti = parseFloat(row.installment_collected || 0);
+                    let sanchay = parseFloat(row.savings_collected || 0);
+                    let total = kisti + sanchay;
+                    if (total > 0) {
+                        fieldCollectionTotal += total;
+                        incomeDetails.push({ category: `আদায়: ${row.member_name || 'সদস্য'}`, amount: total });
+                    }
+                });
+            }
 
-            res.status(200).json({
-                opening_balance: openingBalance,
-                total_income: totalIncome,
-                total_expense: totalExpense,
-                closing_balance: closingBalance
+            db.query(sqlDisbursements, [company_id, date], (err, disbRes) => {
+                let expenseDetails = [];
+                let loanDisbursementTotal = 0.0;
+
+                // কাকে কত টাকা ঋণ দেওয়া হলো তার লিস্ট তৈরি
+                if (disbRes && !err) {
+                    disbRes.forEach(row => {
+                        let amt = parseFloat(row.disburseAmount || 0);
+                        if (amt > 0) {
+                            loanDisbursementTotal += amt;
+                            expenseDetails.push({ category: `ঋণ বিতরণ: ${row.name || 'সদস্য'}`, amount: amt });
+                        }
+                    });
+                }
+
+                db.query(sqlWithdrawals, [company_id, date], (err, withRes) => {
+                     let withdrawalTotal = 0.0;
+                     
+                     // কে কত টাকা সঞ্চয় তুলল তার লিস্ট
+                     if (withRes && !err) {
+                         withRes.forEach(row => {
+                             let amt = parseFloat(row.gs_w || 0);
+                             if (amt > 0) {
+                                 withdrawalTotal += amt;
+                                 expenseDetails.push({ category: `সঞ্চয় উত্তোলন (ID: ${row.member_id})`, amount: amt });
+                             }
+                         });
+                     }
+
+                    db.query(sqlOfficeTx, [company_id, date], (err, officeTxRes) => {
+                        let officeIncomeTotal = 0.0;
+                        let officeExpenseTotal = 0.0;
+
+                        // অফিসের ভাউচার এন্ট্রি লিস্ট
+                        if (officeTxRes && !err) {
+                            officeTxRes.forEach(tx => {
+                                let amt = parseFloat(tx.amount || 0);
+                                if (tx.transaction_type === 'Income') {
+                                    officeIncomeTotal += amt;
+                                    incomeDetails.push({ category: `অফিস আয়: ${tx.category}`, amount: amt });
+                                } else {
+                                    officeExpenseTotal += amt;
+                                    expenseDetails.push({ category: `অফিস ব্যয়: ${tx.category}`, amount: amt });
+                                }
+                            });
+                        }
+
+                        // সব হিসাব একসাথে যোগ-বিয়োগ
+                        let totalIncome = fieldCollectionTotal + officeIncomeTotal;
+                        let totalExpense = loanDisbursementTotal + withdrawalTotal + officeExpenseTotal;
+                        let closingBalance = (openingBalance + totalIncome) - totalExpense;
+
+                        // ফ্লাটার অ্যাপে ডাটা পাঠিয়ে দেওয়া
+                        res.status(200).json({
+                            opening_balance: openingBalance,
+                            total_income: totalIncome,
+                            total_expense: totalExpense,
+                            closing_balance: closingBalance,
+                            income_details: incomeDetails,
+                            expense_details: expenseDetails
+                        });
+                    });
+                });
             });
         });
-    });
-});
-
-// 🔒 ৩. দিন শেষে ক্যাশ ক্লোজ/লক করার API
-app.post('/api/close-day-cash', (req, res) => {
-    const { company_id, date, opening_balance, total_income, total_expense, closing_balance } = req.body;
-
-    const sql = `INSERT INTO daily_cash_closings (company_id, date, opening_balance, total_income, total_expense, closing_balance, is_closed) 
-                 VALUES (?, ?, ?, ?, ?, ?, 1) 
-                 ON DUPLICATE KEY UPDATE opening_balance=?, total_income=?, total_expense=?, closing_balance=?, is_closed=1`;
-
-    db.query(sql, [company_id, date, opening_balance, total_income, total_expense, closing_balance, opening_balance, total_income, total_expense, closing_balance], (err, result) => {
-        if (err) return res.status(500).json({ error: "ডে-ক্লোজ করা সম্ভব হয়নি।" });
-        res.status(200).json({ success: true, message: "আজকের ক্যাশ সফলভাবে বন্ধ (Lock) করা হয়েছে!" });
     });
 });
 
