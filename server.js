@@ -18,13 +18,10 @@ const db = mysql.createPool({
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
-
-ssl: {
-    rejectUnauthorized: false
-
-}
+    ssl: {
+        rejectUnauthorized: false
+    }
 });
-
 
 db.getConnection((err, connection) => {
     if (err) {
@@ -39,7 +36,6 @@ db.getConnection((err, connection) => {
 const sanitizeData = (results) => {
     return results.map(row => ({
         ...row,
-        // যদি কালেকশন ০ থাকে, তবে ডিফল্টভাবে আজকের টার্গেট দেখাবে, নয়তো কালেকশনটাই দেখাবে
         collected: (row.collected == null || row.collected == 0) ? (row.targetToday ?? 0) : row.collected,
         savingsInput: (row.savingsInput == null || row.savingsInput == 0) ? (row.savingsTarget ?? 0) : row.savingsInput,
         targetToday: row.targetToday ?? 0,
@@ -55,43 +51,36 @@ app.post('/api/login', (req, res) => {
     const sql = "SELECT company_id, username, name, role FROM users WHERE username = ? AND password = ? AND status = 'Active'";
     db.query(sql, [username, password], (err, results) => {
         if (err) {
-            console.log("Login Database Error: ", err); // রেন্ডারের লগে দেখাবে
-            return res.status(500).json({ error: "সার্ভার এরর: " + err.message }); // অ্যাপের স্ক্রিনে আসল এরর দেখাবে
+            console.log("Login Database Error: ", err);
+            return res.status(500).json({ error: "সার্ভার এরর: " + err.message });
         }
         if (results.length === 0) return res.status(401).json({ error: "ইউজার আইডি বা পাসওয়ার্ড ভুল!" });
         res.status(200).json({ message: "সফল লগইন", user: results[0] });
     });
 });
 
-// 🔢 নতুন সদস্যের সিরিয়াল আইডি (১০০১, ১০০২...) তৈরি করার API
+// 🔢 নতুন সদস্যের সিরিয়াল আইডি তৈরি করার API
 app.get('/api/get-next-member-id', (req, res) => {
-    // মেম্বার টেবিল থেকে সবচেয়ে বড় আইডিটি খুঁজে আনবে
     const sql = "SELECT id FROM members ORDER BY CAST(id AS UNSIGNED) DESC LIMIT 1";
-    
     db.query(sql, (err, results) => {
         if (err) return res.status(500).json({ error: "ডাটাবেজ এরর" });
-        
-        let nextId = 1001; // যদি ডাটাবেজে কোনো মেম্বার না থাকে, তবে ১০০১ থেকে শুরু হবে
-        
+        let nextId = 1001;
         if (results.length > 0 && !isNaN(results[0].id)) {
-            nextId = parseInt(results[0].id) + 1; // শেষের আইডির সাথে ১ যোগ হবে
+            nextId = parseInt(results[0].id) + 1;
         }
-        
         res.status(200).json({ next_id: nextId.toString() });
     });
 });
 
 // 📅 ২. সিস্টেম তারিখ জানার API 
 app.get('/api/get-system-date', (req, res) => {
-    let companyId = req.query.company_id || 'COM101'; // 💡 ফিক্স: ডিফল্ট COM101
-    
+    let companyId = req.query.company_id || 'COM101';
     const sql = "SELECT DATE_FORMAT(system_date, '%Y-%m-%d') as s_date FROM system_settings WHERE company_id = ?";
     db.query(sql, [companyId], (err, results) => {
         if (err || results.length === 0) {
             const fallbackDate = new Date().toISOString().split('T')[0];
             return res.status(200).json({ current_date: fallbackDate, system_date: fallbackDate, date: fallbackDate });
         }
-        
         const dbDate = results[0].s_date;
         res.status(200).json({ current_date: dbDate, system_date: dbDate, date: dbDate });
     });
@@ -99,64 +88,37 @@ app.get('/api/get-system-date', (req, res) => {
 
 // 📥 ৩. কালেকশন শিট ডাটা API
 app.get('/api/get-collection-data', (req, res) => {
-    // 💡 এখানে sanitizeData ফাংশন ব্যবহার করায় কিস্তির ঘরে এখন টার্গেট এম্যাউন্ট অটো বসে যাবে
     const sql = "SELECT * FROM active_loans WHERE status = 'Active' AND isSavedToday = 'false'";
     db.query(sql, (err, results) => {
         if (err) return res.status(500).json({ error: "ডাটা আনতে সমস্যা হয়েছে।" });
         res.status(200).json(sanitizeData(results));
     });
 });
-//3.1
+
+// 3.1 ফিন্যান্সিয়াল রিপোর্ট প্রিন্ট HTML
 app.get('/api/print-financial-report', (req, res) => {
     const company_id = req.query.company_id;
     const from_date = req.query.from_date;
     const to_date = req.query.to_date;
 
-    // কুয়েরি ১: active_loans থেকে বর্তমানের লাইভ ক্লোজিং ডাটা আনা হচ্ছে (C)
-    db.query(`
-        SELECT 
-            COUNT(id) as total_members,
-            SUM(totalSavings) as total_savings, 
-            SUM(totalDue) as total_due 
-        FROM active_loans
-        WHERE company_id = ?
-    `, [company_id], (err, closingRows) => {
-        
+    db.query(`SELECT COUNT(id) as total_members, SUM(totalSavings) as total_savings, SUM(totalDue) as total_due FROM active_loans WHERE company_id = ?`, [company_id], (err, closingRows) => {
         if (err) return res.status(500).send("Database Error (closing): " + err.message);
 
-        // কুয়েরি ২: daily_top_sheets থেকে নির্দিষ্ট তারিখের রেগুলার লেনদেন আনা হচ্ছে (B)
-        db.query(`
-            SELECT 
-                SUM(total_collection) as sum_recovery,
-                SUM(total_savings) as sum_savings,
-                SUM(total_withdraw) as sum_withdraw
-            FROM daily_top_sheets
-            WHERE company_id = ? AND date BETWEEN ? AND ?
-        `, [company_id, from_date, to_date], (err, dailyRows) => {
-
+        db.query(`SELECT SUM(total_collection) as sum_recovery, SUM(total_savings) as sum_savings, SUM(total_withdraw) as sum_withdraw FROM daily_top_sheets WHERE company_id = ? AND date BETWEEN ? AND ?`, [company_id, from_date, to_date], (err, dailyRows) => {
             if (err) return res.status(500).send("Database Error (daily): " + err.message);
 
-            // কুয়েরি ৩: active_loans থেকে নির্দিষ্ট তারিখের নতুন লোন বিতরণের ডাটা আনা হচ্ছে
-            db.query(`
-                SELECT 
-                    SUM(disburseAmount) as sum_new_loans 
-                FROM active_loans 
-                WHERE company_id = ? AND disburseDate BETWEEN ? AND ?
-            `, [company_id, from_date, to_date], (err, loanRows) => {
-
+            db.query(`SELECT SUM(disburseAmount) as sum_new_loans FROM active_loans WHERE company_id = ? AND disburseDate BETWEEN ? AND ?`, [company_id, from_date, to_date], (err, loanRows) => {
                 if (err) return res.status(500).send("Database Error (disbursement): " + err.message);
 
                 const dbClosing = closingRows && closingRows[0] ? closingRows[0] : {};
                 const dbDaily = dailyRows && dailyRows[0] ? dailyRows[0] : {};
                 const dbLoan = loanRows && loanRows[0] ? loanRows[0] : {};
 
-                // লোন বিতরণের হিসাব
                 const loan_disbursed_principal = Number(dbLoan.sum_new_loans) || 0; 
                 const loan_disbursed_with_profit = loan_disbursed_principal > 0 ? loan_disbursed_principal * 1.20 : 0; 
                 const loan_recovery = Number(dbDaily.sum_recovery) || 0; 
                 const net_loan_change = loan_disbursed_with_profit - loan_recovery;
 
-                // সঞ্চয়ের হিসাব
                 const regular_savings = Number(dbDaily.sum_savings) || 0;
                 const disburse_savings_deduction = loan_disbursed_principal * 0.10; 
                 const total_savings_collection = regular_savings + disburse_savings_deduction; 
@@ -164,12 +126,10 @@ app.get('/api/print-financial-report', (req, res) => {
                 const savings_refund = Number(dbDaily.sum_withdraw) || 0;
                 const net_savings_change = total_savings_collection - savings_refund;
 
-                // ক্লোজিং ব্যালেন্স (লাইভ ডাটা)
                 const closing_members = dbClosing.total_members || 0;
                 const closing_savings = dbClosing.total_savings || 0;
                 const closing_loan = dbClosing.total_due || 0;
 
-                // ওপেনিং ব্যালেন্স
                 const opening_members = closing_members; 
                 const opening_savings = closing_savings - net_savings_change;
                 const opening_loan = closing_loan - net_loan_change;
@@ -179,28 +139,9 @@ app.get('/api/print-financial-report', (req, res) => {
                     branch: "Branch: 01 (Banasree Branch)",
                     address: "South Banasree, Khilgaon, Dhaka-1219",
                     date_range: `Date: ${from_date} to ${to_date}`,
-                    
-                    opening: { 
-                        members: opening_members, 
-                        savings_os: Math.round(opening_savings), 
-                        loan_due: Math.round(opening_loan), 
-                        loan_os: Math.round(opening_loan) 
-                    },
-                    during: { 
-                        new_members: 0, 
-                        dropouts: 0, 
-                        savings_col: Math.round(total_savings_collection), 
-                        savings_ref: Math.round(savings_refund), 
-                        disbursed_qty: loan_disbursed_principal > 0 ? 1 : 0, 
-                        disbursed_amt: Math.round(loan_disbursed_principal), 
-                        recovery: Math.round(loan_recovery) 
-                    },
-                    closing: { 
-                        members: closing_members, 
-                        savings_os: Math.round(closing_savings), 
-                        loan_due: Math.round(closing_loan), 
-                        loan_os: Math.round(closing_loan) 
-                    }
+                    opening: { members: opening_members, savings_os: Math.round(opening_savings), loan_due: Math.round(opening_loan), loan_os: Math.round(opening_loan) },
+                    during: { new_members: 0, dropouts: 0, savings_col: Math.round(total_savings_collection), savings_ref: Math.round(savings_refund), disbursed_qty: loan_disbursed_principal > 0 ? 1 : 0, disbursed_amt: Math.round(loan_disbursed_principal), recovery: Math.round(loan_recovery) },
+                    closing: { members: closing_members, savings_os: Math.round(closing_savings), loan_due: Math.round(closing_loan), loan_os: Math.round(closing_loan) }
                 };
 
                 const htmlResponse = `
@@ -408,28 +349,17 @@ app.post('/api/lock-collection', (req, res) => {
     });
 });
 
-// 🔄 ৯. পরবর্তী দিন আপডেট (মডিফাইড ভার্সন)
+// 🔄 ৯. পরবর্তী দিন আপডেট
 app.post('/api/next-day-update', (req, res) => {
     let { company_id, next_date } = req.body; 
-    let cid = company_id || '101'; // ডিফল্ট আইডি 101 ধরবে
-
-    console.log("Update requested for Company ID:", cid); // এটি কনসোলে দেখা যাবে
+    let cid = company_id || '101';
 
     const checkCurrentDateSql = "SELECT DATE_FORMAT(system_date, '%Y-%m-%d') as current_system_date FROM system_settings WHERE company_id = ?";
-    
     db.query(checkCurrentDateSql, [cid], (checkErr, checkResults) => {
-        if (checkErr) {
-            console.error("Database Error:", checkErr);
-            return res.status(500).json({ error: "ডাটাবেজ কানেকশন এরর।" });
-        }
-        
-        if (checkResults.length === 0) {
-            console.error("No record found for ID:", cid);
-            return res.status(404).json({ error: `সিস্টেম তারিখ পাওয়া যায়নি (ID: ${cid})। আপনার ডাটাবেজে কোম্পানি আইডি চেক করুন।` });
-        }
+        if (checkErr) return res.status(500).json({ error: "ডাটাবেজ কানেকশন এরর।" });
+        if (checkResults.length === 0) return res.status(404).json({ error: `সিস্টেম তারিখ পাওয়া যায়নি।` });
 
         const currentSystemDate = checkResults[0].current_system_date;
-
         if (next_date) {
             const currentSec = new Date(currentSystemDate).getTime();
             const nextSec = new Date(next_date).getTime();
@@ -438,16 +368,12 @@ app.post('/api/next-day-update', (req, res) => {
 
         const updateAbsentSql = `UPDATE active_loans SET accumulatedDue = accumulatedDue + targetToday WHERE isSavedToday = 'false' AND status = 'Active' AND type != 'Savings Only' AND company_id = ?`;
         db.query(updateAbsentSql, [cid], (absentErr) => {
-            
             const resetSheetSql = `UPDATE active_loans SET collected = 0, savingsInput = 0, isSavedToday = 'false' WHERE company_id = ?`;
             db.query(resetSheetSql, [cid], (resetErr) => {
-                
                 const clearFinalSubmitSql = `DELETE FROM final_collection_submits`; 
                 db.query(clearFinalSubmitSql, () => {
-                    
                     let updateDateSql = '';
                     let params = [];
-                    
                     if (next_date) {
                         updateDateSql = `UPDATE system_settings SET system_date = ? WHERE company_id = ?`;
                         params = [next_date, cid];
@@ -455,7 +381,6 @@ app.post('/api/next-day-update', (req, res) => {
                         updateDateSql = `UPDATE system_settings SET system_date = DATE_ADD(system_date, INTERVAL 1 DAY) WHERE company_id = ?`;
                         params = [cid];
                     }
-                    
                     db.query(updateDateSql, params, (dateErr) => {
                         if(dateErr) return res.status(500).json({error: "তারিখ আপডেট ব্যর্থ!"});
                         res.status(200).json({ message: "সফলভাবে ডে-ইন সম্পন্ন হয়েছে!" });
@@ -465,6 +390,7 @@ app.post('/api/next-day-update', (req, res) => {
         });
     });
 });
+
 // 🛠️ ১০. ডে-এন্ড ছাড়াই এমার্জেন্সি সিস্টেম ডেট পরিবর্তনের জন্য
 app.post('/api/set-system-date', (req, res) => {
     const { company_id, target_date } = req.body; 
@@ -483,53 +409,22 @@ app.post('/api/db-update', (req, res) => {
     db.query("ANALYZE TABLE members, active_loans", () => res.status(200).json({ message: "ডাটাবেজ আপডেট হয়েছে!" }));
 });
 
-
-// =========================================================================
-// 📝 🎯 মডিফাইড নতুন সদস্য ভর্তি এবং পুরাতন রানিং সদস্য এন্ট্রি লজিক API
-// =========================================================================
+// 📝 নতুন সদস্য ভর্তি এবং পুরাতন রানিং সদস্য এন্ট্রি লজিক API
 app.post('/api/member/register', (req, res) => {
-    const { 
-        id, name, guardianName, phone, address, 
-        isOldMember, totalSavings, totalDue, disburseAmount, disburseDate, company_id 
-    } = req.body;
-
-    // ১. প্রথমে মেম্বার টেবিলে ডাটা সাধারণ নিয়মেই সেভ হবে 
+    const { id, name, guardianName, phone, address, isOldMember, totalSavings, totalDue, disburseAmount, disburseDate, company_id } = req.body;
     const memberSql = "INSERT INTO members (id, name, guardianName, phone, address) VALUES (?, ?, ?, ?, ?)";
     
     db.query(memberSql, [id, name, guardianName, phone, address], (err) => {
-        if (err) {
-            console.error("Member Insert Error:", err);
-            return res.status(500).json({ error: "ডাটাবেজে সদস্য সেভ করতে ব্যর্থ!" });
-        }
+        if (err) return res.status(500).json({ error: "ডাটাবেজে সদস্য সেভ করতে ব্যর্থ!" });
 
-        // ২. ফ্লাটার থেকে যদি ইশারা আসে 'isOldMember = true', তবে একে প্রপোজাল রুমে না পাঠিয়ে ডিরেক্ট active_loans টেবিলে সচল করে দেওয়া হবে।
         if (isOldMember === true || isOldMember === 'true') {
             const finalCompanyId = company_id || 'COM101';
-            
-            // সরাসরি কালেকশন শিটের ফিল্টারে দেখানোর জন্য active_loans টেবিলে 'Active' এবং 'false' স্ট্যাটাসে ইনসার্ট
-            const loanSql = `INSERT INTO active_loans 
-                (\`id\`, \`name\`, \`disburseDate\`, \`disburseAmount\`, \`totalDue\`, \`targetToday\`, \`accumulatedDue\`, \`collected\`, \`targetWeek\`, \`totalPaid\`, \`status\`, \`type\`, \`installmentType\`, \`savingsInput\`, \`savingsTarget\`, \`totalSavings\`, \`isSavedToday\`, \`isFullPaidSection\`, \`company_id\`) 
-                VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 'Active', 'Regular', 'Daily', 0, 0, ?, 'false', 'false', ?)`;
-            
-            const loanValues = [
-                id, 
-                name, 
-                disburseDate,     // খাতার পুরোনো ঋণের আদি তারিখ
-                disburseAmount,   // খাতার পুরোনো আসল ঋণের টাকা
-                totalDue,         // খাতার অবশিষ্ট বাকি ঋণ
-                totalSavings,     // খাতার মোট জমানো সঞ্চয়
-                finalCompanyId    // প্রতিষ্ঠান কোড
-            ];
-
-            db.query(loanSql, loanValues, (loanErr) => {
-                if (loanErr) {
-                    console.error("Active Loan Insert Error for Old Member:", loanErr);
-                    return res.status(500).json({ error: "সদস্য প্রোফাইল তৈরি হয়েছে কিন্তু পুরাতন লোন শিটে ডিরেক্ট সচল করতে সমস্যা হয়েছে!" });
-                }
+            const loanSql = `INSERT INTO active_loans (\`id\`, \`name\`, \`disburseDate\`, \`disburseAmount\`, \`totalDue\`, \`targetToday\`, \`accumulatedDue\`, \`collected\`, \`targetWeek\`, \`totalPaid\`, \`status\`, \`type\`, \`installmentType\`, \`savingsInput\`, \`savingsTarget\`, \`totalSavings\`, \`isSavedToday\`, \`isFullPaidSection\`, \`company_id\`) VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 'Active', 'Regular', 'Daily', 0, 0, ?, 'false', 'false', ?)`;
+            db.query(loanSql, [id, name, disburseDate, disburseAmount, totalDue, totalSavings, finalCompanyId], (loanErr) => {
+                if (loanErr) return res.status(500).json({ error: "পুরাতন লোন শিটে ডিরেক্ট সচল করতে সমস্যা হয়েছে!" });
                 return res.status(200).json({ message: "পুরাতন রানিং সদস্য সরাসরি একটিভ লোন কালেকশন শিটে যোগ হয়েছে!" });
             });
         } else {
-            // মেম্বারটি যদি সাধারণ নতুন মেম্বার হয়, তবে সে নরমালি মেম্বার হিসেবেই সেভ থাকবে (লোন প্রপোজাল রুমে শো করবে)
             return res.status(200).json({ message: "নতুন সদস্য সফলভাবে রেজিস্টার হয়েছে!" });
         }
     });
@@ -544,52 +439,12 @@ app.get('/api/loan-proposals', (req, res) => {
     });
 });
 
-// 💰 লোন প্রপোজাল একটিভ করা (সদস্য একটিভ হওয়া)
+// 💰 লোন প্রপোজাল একটিভ করা 
 app.post('/api/loan/proposal', (req, res) => {
-    const {
-        id, name, disburseDate, disburseAmount, totalDue, targetToday, 
-        accumulatedDue, collected, targetWeek, totalPaid, status, 
-        type, installmentType, savingsInput, savingsTarget, totalSavings, 
-        isSavedToday, isFullPaidSection, company_id
-    } = req.body;
-
-    // 🎯 জাদুকরী লজিক: ON DUPLICATE KEY UPDATE 
-    // যদি সদস্য আগে থেকেই থাকে, তবে তার আগের লোন মুছে নতুন লোনের ডাটা বসে যাবে। 
-    // তবে তার আগের জমানো সঞ্চয় (totalSavings) এর সাথে নতুন সঞ্চয় যোগ হয়ে যাবে!
-    const sql = `
-        INSERT INTO active_loans 
-        (id, name, disburseDate, disburseAmount, totalDue, targetToday, accumulatedDue, collected, targetWeek, totalPaid, status, type, installmentType, savingsInput, savingsTarget, totalSavings, isSavedToday, isFullPaidSection, company_id) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE 
-        name = VALUES(name),
-        disburseDate = VALUES(disburseDate),
-        disburseAmount = VALUES(disburseAmount),
-        totalDue = VALUES(totalDue),
-        targetToday = VALUES(targetToday),
-        accumulatedDue = VALUES(accumulatedDue),
-        targetWeek = VALUES(targetWeek),
-        status = 'Active',
-        type = VALUES(type),
-        installmentType = VALUES(installmentType),
-        savingsTarget = VALUES(savingsTarget),
-        totalSavings = COALESCE(totalSavings, 0) + VALUES(totalSavings), 
-        collected = 0, 
-        totalPaid = 0, 
-        savingsInput = 0,
-        isSavedToday = 'false'
-    `;
-
-    const values = [
-        id, name, disburseDate, disburseAmount, totalDue, targetToday, accumulatedDue, 
-        collected, targetWeek, totalPaid, status, type, installmentType, savingsInput, 
-        savingsTarget, totalSavings, isSavedToday, isFullPaidSection, company_id
-    ];
-
-    db.query(sql, values, (err, result) => {
-        if (err) {
-            console.error("Loan Proposal Error:", err);
-            return res.status(500).json({ error: "লোন আপডেট করতে ডাটাবেজ এরর!" });
-        }
+    const { id, name, disburseDate, disburseAmount, totalDue, targetToday, accumulatedDue, collected, targetWeek, totalPaid, status, type, installmentType, savingsInput, savingsTarget, totalSavings, isSavedToday, isFullPaidSection, company_id } = req.body;
+    const sql = `INSERT INTO active_loans (id, name, disburseDate, disburseAmount, totalDue, targetToday, accumulatedDue, collected, targetWeek, totalPaid, status, type, installmentType, savingsInput, savingsTarget, totalSavings, isSavedToday, isFullPaidSection, company_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name), disburseDate = VALUES(disburseDate), disburseAmount = VALUES(disburseAmount), totalDue = VALUES(totalDue), targetToday = VALUES(targetToday), accumulatedDue = VALUES(accumulatedDue), targetWeek = VALUES(targetWeek), status = 'Active', type = VALUES(type), installmentType = VALUES(installmentType), savingsTarget = VALUES(savingsTarget), totalSavings = COALESCE(totalSavings, 0) + VALUES(totalSavings), collected = 0, totalPaid = 0, savingsInput = 0, isSavedToday = 'false'`;
+    db.query(sql, [id, name, disburseDate, disburseAmount, totalDue, targetToday, accumulatedDue, collected, targetWeek, totalPaid, status, type, installmentType, savingsInput, savingsTarget, totalSavings, isSavedToday, isFullPaidSection, company_id], (err, result) => {
+        if (err) return res.status(500).json({ error: "লোন আপডেট করতে ডাটাবেজ এরর!" });
         res.status(200).json({ message: "সদস্যের লোন সফলভাবে আপডেট হয়ে কালেকশন শিটে যুক্ত হয়েছে!" });
     });
 });
@@ -600,20 +455,9 @@ app.get('/api/get-top-sheet-data', (req, res) => {
     let cid = company_id || 'COM101'; 
     if (!target_date) return res.status(400).json({ error: "তারিখ প্রয়োজন!" });
 
-    const sql = `
-        SELECT 
-            IFNULL(total_collection, 0) as total_kisti_collected,
-            IFNULL(total_savings, 0) as total_sheet_savings,
-            IFNULL(total_disbursement, 0) as total_loan_disbursed,
-            IFNULL(total_disburse_savings, 0) as total_disburse_savings,
-            IFNULL(total_admission_savings, 0) as total_admission_savings
-        FROM daily_top_sheets 
-        WHERE date = ? AND company_id = ?
-    `;
-
+    const sql = `SELECT IFNULL(total_collection, 0) as total_kisti_collected, IFNULL(total_savings, 0) as total_sheet_savings, IFNULL(total_disbursement, 0) as total_loan_disbursed, IFNULL(total_disburse_savings, 0) as total_disburse_savings, IFNULL(total_admission_savings, 0) as total_admission_savings FROM daily_top_sheets WHERE date = ? AND company_id = ?`;
     db.query(sql, [target_date, cid], (err, results) => {
         if (err) return res.status(500).json({ error: "টপ শিট এরর।" });
-
         if (results.length > 0) {
             const data = results[0];
             data.grand_total_savings = parseFloat(data.total_sheet_savings) + parseFloat(data.total_disburse_savings) + parseFloat(data.total_admission_savings);
@@ -629,71 +473,35 @@ app.get('/api/get-financial-report', (req, res) => {
     const cid = req.query.company_id || '1';
     const fromDate = req.query.from_date; 
     const toDate = req.query.to_date;     
-
     if (!fromDate || !toDate) return res.status(400).json({ error: "তারিখ সিলেক্ট করা হয়নি!" });
 
-    const sql = `
-        SELECT 
-            (SELECT IFNULL(SUM(totalSavings), 0) FROM active_loans WHERE company_id = ?) as current_savings,
-            (SELECT IFNULL(SUM(totalDue), 0) FROM active_loans WHERE company_id = ?) as current_loan_balance,
-            (SELECT IFNULL(SUM(accumulatedDue), 0) FROM active_loans WHERE company_id = ?) as current_due,
-            (SELECT IFNULL(SUM(total_savings), 0) FROM daily_top_sheets WHERE company_id = ? AND date BETWEEN ? AND ?) as range_savings,
-            (SELECT IFNULL(SUM(total_collection), 0) FROM daily_top_sheets WHERE company_id = ? AND date BETWEEN ? AND ?) as range_collection,
-            (SELECT IFNULL(SUM(total_savings), 0) FROM daily_top_sheets WHERE company_id = ? AND date >= ?) as savings_from_start,
-            (SELECT IFNULL(SUM(total_collection), 0) FROM daily_top_sheets WHERE company_id = ? AND date >= ?) as collection_from_start
-    `;
-    
+    const sql = `SELECT (SELECT IFNULL(SUM(totalSavings), 0) FROM active_loans WHERE company_id = ?) as current_savings, (SELECT IFNULL(SUM(totalDue), 0) FROM active_loans WHERE company_id = ?) as current_loan_balance, (SELECT IFNULL(SUM(accumulatedDue), 0) FROM active_loans WHERE company_id = ?) as current_due, (SELECT IFNULL(SUM(total_savings), 0) FROM daily_top_sheets WHERE company_id = ? AND date BETWEEN ? AND ?) as range_savings, (SELECT IFNULL(SUM(total_collection), 0) FROM daily_top_sheets WHERE company_id = ? AND date BETWEEN ? AND ?) as range_collection, (SELECT IFNULL(SUM(total_savings), 0) FROM daily_top_sheets WHERE company_id = ? AND date >= ?) as savings_from_start, (SELECT IFNULL(SUM(total_collection), 0) FROM daily_top_sheets WHERE company_id = ? AND date >= ?) as collection_from_start`;
     db.query(sql, [cid, cid, cid, cid, fromDate, toDate, cid, fromDate, toDate, cid, fromDate, cid, fromDate], (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
-        
         const data = results[0];
         const opening_savings = data.current_savings - data.savings_from_start;
         const opening_loan_balance = data.current_loan_balance + data.collection_from_start;
-
-        res.json({
-            opening_savings: opening_savings >= 0 ? opening_savings : 0,
-            opening_loan_balance: opening_loan_balance,
-            range_savings: data.range_savings,
-            range_collection: data.range_collection,
-            range_loan_disbursed: 0, 
-            closing_loan: data.current_loan_balance, 
-            closing_savings: data.current_savings,
-            closing_due: data.current_due
-        });
+        res.json({ opening_savings: opening_savings >= 0 ? opening_savings : 0, opening_loan_balance: opening_loan_balance, range_savings: data.range_savings, range_collection: data.range_collection, range_loan_disbursed: 0, closing_loan: data.current_loan_balance, closing_savings: data.current_savings, closing_due: data.current_due });
     });
 });
 
-// ১. 🔍 মেম্বার সাজেশন API (সব সদস্যকে খুঁজবে)
+// ১. 🔍 মেম্বার সাজেশন API
 app.get('/api/suggest-members', (req, res) => {
     const query = req.query.q;
     const qStr = `%${query}%`;
-    
-    // members এবং active_loans দুই টেবিল মিলিয়ে খুঁজবে
-    const sql = `
-        SELECT id, name FROM members WHERE id LIKE ? OR name LIKE ?
-        UNION 
-        SELECT id, name FROM active_loans WHERE id LIKE ? OR name LIKE ?
-        LIMIT 15
-    `;
-    
+    const sql = `SELECT id, name FROM members WHERE id LIKE ? OR name LIKE ? UNION SELECT id, name FROM active_loans WHERE id LIKE ? OR name LIKE ? LIMIT 15`;
     db.query(sql, [qStr, qStr, qStr, qStr], (err, results) => {
         if (err) return res.json({ success: false, message: "ডাটাবেজ এরর" });
         res.json({ success: true, members: results });
     });
 });
 
-// ==========================================================
 // 🔍 ২. নির্দিষ্ট সদস্যের বিস্তারিত ডাটা আনার API
-// ==========================================================
 app.get('/api/get-member/:id', (req, res) => {
     const memberId = req.params.id;
-    
-    // প্রথমে কালেকশন শিটে খুঁজবে (কারণ সঞ্চয়ী সদস্যরা এখানেই থাকে)
     const sql1 = `SELECT id, name, '' as phone, '' as father_name FROM active_loans WHERE id = ?`;
-    
     db.query(sql1, [memberId], (err, results1) => {
         if (results1 && results1.length > 0) {
-            // যদি কালেকশন শিটে পায়, তবে তার মোবাইল নাম্বার আনার জন্য members টেবিলে উঁকি দিবে
             const sql2 = `SELECT phone, guardianName as father_name FROM members WHERE id = ?`;
             db.query(sql2, [memberId], (err2, results2) => {
                 let memberData = results1[0];
@@ -704,82 +512,77 @@ app.get('/api/get-member/:id', (req, res) => {
                 return res.json({ success: true, member: memberData });
             });
         } else {
-            // যদি কালেকশন শিটে না থাকে, তবে সরাসরি members টেবিল থেকে আনবে
             const sql3 = `SELECT id, name, phone, guardianName as father_name FROM members WHERE id = ?`;
             db.query(sql3, [memberId], (err3, results3) => {
-                if (results3 && results3.length > 0) {
-                    return res.json({ success: true, member: results3[0] });
-                }
+                if (results3 && results3.length > 0) return res.json({ success: true, member: results3[0] });
                 res.json({ success: false, message: "সদস্য পাওয়া যায়নি!" });
             });
         }
     });
 });
-// ৩. 🗑️ ডিলিট API (কালেকশন শিট এবং মেম্বার লিস্ট দুই জায়গা থেকেই মুছবে)
+
+// ৩. 🗑️ ডিলিট API
 app.post('/api/delete-member', (req, res) => {
     const { id } = req.body;
-
-    // প্রথমে active_loans (কালেকশন শিট) থেকে মুছবে
     const deleteFromLoans = "DELETE FROM active_loans WHERE id = ?";
     db.query(deleteFromLoans, [id], (err1) => {
-        if (err1) {
-            return res.json({ success: false, message: "কালেকশন শিট থেকে মুছতে সমস্যা হয়েছে!" });
-        }
-
-        // এরপর members টেবিল থেকেও মুছে দেবে
+        if (err1) return res.json({ success: false, message: "কালেকশন শিট থেকে মুছতে সমস্যা হয়েছে!" });
         const deleteFromMembers = "DELETE FROM members WHERE id = ?";
         db.query(deleteFromMembers, [id], (err2) => {
-            if (err2) {
-                return res.json({ success: false, message: "সদস্য তালিকা থেকে মুছতে সমস্যা হয়েছে!" });
-            }
-            res.json({ success: true, message: "সদস্যকে কালেকশন শিট ও সিস্টেম থেকে চিরতরে ডিলিট করা হয়েছে!" });
+            if (err2) return res.json({ success: false, message: "সদস্য তালিকা থেকে মুছতে সমস্যা হয়েছে!" });
+            res.json({ success: true, message: "সদস্যকে চিরতরে ডিলিট করা হয়েছে!" });
         });
     });
 });
 
 // 📊 ম্যানেজার লাইভ অ্যানালিটিক্স রিপোর্ট API
 app.get('/api/manager-live-analytics', (req, res) => {
-    const loanSummarySql = `
-        SELECT 
-            IFNULL(SUM(CASE WHEN loan_type = 'Daily' THEN totalDue ELSE 0 END), 0) as dailyLoan,
-            IFNULL(SUM(CASE WHEN loan_type = 'Weekly' THEN totalDue ELSE 0 END), 0) as weeklyLoan,
-            IFNULL(SUM(CASE WHEN loan_type = 'Consumer' THEN totalDue ELSE 0 END), 0) as consumerLoan,
-            IFNULL(SUM(totalDue), 0) as totalLoanBalance
-        FROM active_loans;
-    `;
+    const loanSummarySql = `SELECT IFNULL(SUM(CASE WHEN loan_type = 'Daily' THEN totalDue ELSE 0 END), 0) as dailyLoan, IFNULL(SUM(CASE WHEN loan_type = 'Weekly' THEN totalDue ELSE 0 END), 0) as weeklyLoan, IFNULL(SUM(CASE WHEN loan_type = 'Consumer' THEN totalDue ELSE 0 END), 0) as consumerLoan, IFNULL(SUM(totalDue), 0) as totalLoanBalance FROM active_loans;`;
     db.query(loanSummarySql, (err, results) => {
         if (err) return res.status(500).json({ success: false });
         res.json({ success: true, data: { loanSummary: results[0] } });
     });
 });
 
-// 📊 দৈনিক ক্যাশের লাইভ সামারি এবং প্রতিটি সদস্যের ডিটেইলস হিস্টোরি (আপডেটেড)
+
+// =========================================================================
+// 🔀 ফিক্সড ও আপডেটেড: দৈনিক ক্যাশ বুক সামারি ও মেম্বারভিত্তিক ট্রানজেকশন হিস্টোরি
+// =========================================================================
 app.get('/api/get-daily-cash-summary', (req, res) => {
     const { company_id, date } = req.query;
 
-    // ১. আগের দিনের ক্লোজিং ব্যালেন্স 
+    // ১. আগের দিনের সমাপনী ক্যাশ (Opening Balance)
     const sqlOpening = `SELECT closing_balance FROM daily_cash_closings WHERE company_id = ? AND date < ? ORDER BY date DESC LIMIT 1`;
 
-    // ২. মাঠের আদায় (ভিডিও অনুযায়ী collections টেবিল থেকে)
-    const sqlCollections = `SELECT member_name, installment_collected, savings_collected FROM collections WHERE collection_date = ?`;
+    // 💡 ২. ফিক্সড লজিক: কাল্পনিক collections টেবিল বাদ দিয়ে loan_history এবং active_loans জয়েন করে আজকের মাঠের আদায় আনা হচ্ছে
+    const sqlCollections = `
+        SELECT al.name as member_name, lh.collected as installment_collected, lh.savings as savings_collected 
+        FROM loan_history lh
+        JOIN active_loans al ON lh.member_id = al.id
+        WHERE lh.date = ? AND al.company_id = ? AND lh.type = 'নিয়মিত আদায়'
+    `;
 
     // ৩. ঋণ বিতরণ (active_loans টেবিল থেকে)
     const sqlDisbursements = `SELECT name, disburseAmount FROM active_loans WHERE company_id = ? AND disburseDate = ?`;
 
-    // ৪. সঞ্চয় উত্তোলন (ভিডিও অনুযায়ী loan_history টেবিল থেকে)
-    const sqlWithdrawals = `SELECT member_id, gs_w FROM loan_history WHERE company_id = ? AND date = ? AND type = 'সঞ্চয় উত্তোলন'`;
+    // 💡 ৪. ফিক্সড লজিক: সঞ্চয় উত্তোলনের সময় মেম্বারের নাম পাওয়ার জন্য active_loans এর সাথে জয়েন করা হচ্ছে
+    const sqlWithdrawals = `
+        SELECT lh.member_id, al.name as member_name, lh.gs_w 
+        FROM loan_history lh
+        JOIN active_loans al ON lh.member_id = al.id
+        WHERE al.company_id = ? AND lh.date = ? AND lh.type = 'সঞ্চয় উত্তোলন'
+    `;
 
     // ৫. অফিসের বিবিধ আয়/ব্যয় (office_transactions টেবিল থেকে)
     const sqlOfficeTx = `SELECT transaction_type, category, amount FROM office_transactions WHERE company_id = ? AND date = ?`;
 
     db.query(sqlOpening, [company_id, date], (err, openingRes) => {
-        let openingBalance = openingRes.length > 0 ? parseFloat(openingRes[0].closing_balance) : 0.0;
+        let openingBalance = (openingRes && openingRes.length > 0) ? parseFloat(openingRes[0].closing_balance) : 0.0;
 
-        db.query(sqlCollections, [date], (err, collRes) => {
+        db.query(sqlCollections, [date, company_id], (err, collRes) => {
             let incomeDetails = [];
             let fieldCollectionTotal = 0.0;
 
-            // কোন সদস্য কত টাকা দিল তার লিস্ট তৈরি
             if (collRes && !err) {
                 collRes.forEach(row => {
                     let kisti = parseFloat(row.installment_collected || 0);
@@ -787,7 +590,7 @@ app.get('/api/get-daily-cash-summary', (req, res) => {
                     let total = kisti + sanchay;
                     if (total > 0) {
                         fieldCollectionTotal += total;
-                        incomeDetails.push({ category: `আদায়: ${row.member_name || 'সদস্য'}`, amount: total });
+                        incomeDetails.push({ category: `মাঠ আদায়: ${row.member_name || 'সদস্য'}`, amount: total });
                     }
                 });
             }
@@ -796,7 +599,6 @@ app.get('/api/get-daily-cash-summary', (req, res) => {
                 let expenseDetails = [];
                 let loanDisbursementTotal = 0.0;
 
-                // কাকে কত টাকা ঋণ দেওয়া হলো তার লিস্ট তৈরি
                 if (disbRes && !err) {
                     disbRes.forEach(row => {
                         let amt = parseFloat(row.disburseAmount || 0);
@@ -809,14 +611,12 @@ app.get('/api/get-daily-cash-summary', (req, res) => {
 
                 db.query(sqlWithdrawals, [company_id, date], (err, withRes) => {
                      let withdrawalTotal = 0.0;
-                     
-                     // কে কত টাকা সঞ্চয় তুলল তার লিস্ট
                      if (withRes && !err) {
                          withRes.forEach(row => {
                              let amt = parseFloat(row.gs_w || 0);
                              if (amt > 0) {
                                  withdrawalTotal += amt;
-                                 expenseDetails.push({ category: `সঞ্চয় উত্তোলন (ID: ${row.member_id})`, amount: amt });
+                                 expenseDetails.push({ category: `সঞ্চয় উত্তোলন: ${row.member_name || row.member_id}`, amount: amt });
                              }
                          });
                      }
@@ -825,7 +625,6 @@ app.get('/api/get-daily-cash-summary', (req, res) => {
                         let officeIncomeTotal = 0.0;
                         let officeExpenseTotal = 0.0;
 
-                        // অফিসের ভাউচার এন্ট্রি লিস্ট
                         if (officeTxRes && !err) {
                             officeTxRes.forEach(tx => {
                                 let amt = parseFloat(tx.amount || 0);
@@ -839,12 +638,10 @@ app.get('/api/get-daily-cash-summary', (req, res) => {
                             });
                         }
 
-                        // সব হিসাব একসাথে যোগ-বিয়োগ
                         let totalIncome = fieldCollectionTotal + officeIncomeTotal;
                         let totalExpense = loanDisbursementTotal + withdrawalTotal + officeExpenseTotal;
                         let closingBalance = (openingBalance + totalIncome) - totalExpense;
 
-                        // ফ্লাটার অ্যাপে ডাটা পাঠিয়ে দেওয়া
                         res.status(200).json({
                             opening_balance: openingBalance,
                             total_income: totalIncome,
@@ -860,6 +657,83 @@ app.get('/api/get-daily-cash-summary', (req, res) => {
     });
 });
 
-// Render এবং লোকাল দুই জায়গাতেই যেন কাজ করে তাই ডাইনামিক পোর্ট বসানো হলো
+
+// =========================================================================
+// 🆕 নতুন যুক্ত করা API ১: অফিস ভাউচার এন্ট্রি সেভ করার জন্য
+// =========================================================================
+app.post('/api/add-office-transaction', (req, res) => {
+    const { company_id, date, transaction_type, category, amount, description } = req.body;
+    
+    if(!category || !amount) return res.status(400).json({ error: "খাত এবং টাকার পরিমাণ আবশ্যক!" });
+
+    const sql = `INSERT INTO office_transactions (company_id, date, transaction_type, category, amount, description) VALUES (?, ?, ?, ?, ?, ?)`;
+    db.query(sql, [company_id || 'COM101', date, transaction_type, category, amount, description || ''], (err, result) => {
+        if (err) {
+            console.error("Voucher Save Error:", err);
+            return res.status(500).json({ error: "অফিস ট্রানজেকশন সেভ করতে ডাটাবেজে সমস্যা হয়েছে।" });
+        }
+        res.status(200).json({ message: "✅ ভাউচার সফলভাবে সেভ হয়েছে!" });
+    });
+});
+
+
+// =========================================================================
+// 🆕 নতুন যুক্ত করা API ২: ফাইনাল ডে-ক্লোজ (ক্যাশ লক) করার জন্য
+// =========================================================================
+app.post('/api/close-day-cash', (req, res) => {
+    const { company_id, date, opening_balance, total_income, total_expense, closing_balance } = req.body;
+
+    const sql = `
+        INSERT INTO daily_cash_closings (company_id, date, opening_balance, total_income, total_expense, closing_balance) 
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE 
+        opening_balance = VALUES(opening_balance),
+        total_income = VALUES(total_income),
+        total_expense = VALUES(total_expense),
+        closing_balance = VALUES(closing_balance)
+    `;
+
+    db.query(sql, [company_id || 'COM101', date, opening_balance, total_income, total_expense, closing_balance], (err, result) => {
+        if (err) {
+            console.error("Day Close Error:", err);
+            return res.status(500).json({ error: "আজকের ডে-ক্লোজ ডাটাবেজে সেভ করতে সমস্যা হয়েছে।" });
+        }
+        res.status(200).json({ message: "🔒 আজকের দিনের ক্যাশবুক সফলভাবে লক করা হয়েছে!" });
+    });
+});
+
+// Hierarchy Details সেভ করার API
+app.post('/api/hierarchy-details', (req, res) => {
+    const { 
+        hierarchy, 
+        name, 
+        code, 
+        establishmentDate, 
+        operationDate, 
+        activityStatus, 
+        correctionDayAllotment, 
+        address, 
+        contactInformation 
+    } = req.body;
+
+    const sqlQuery = `INSERT INTO hierarchy_details 
+        (hierarchy, name, code, establishment_date, operation_date, activity_status, correction_day_allotment, address, contact_information) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+    const values = [
+        hierarchy, name, code, establishmentDate, operationDate, activityStatus, correctionDayAllotment, address, contactInformation
+    ];
+
+    // আপনার ডাটাবেজ কানেকশনের নাম db না হয়ে connection হলে এখানে connection.query লিখবেন
+    db.query(sqlQuery, values, (error, result) => {
+        if (error) {
+            console.error("Database Error:", error);
+            return res.status(500).json({ error: "ডাটা সেভ করতে সমস্যা হয়েছে!" });
+        }
+        res.status(200).json({ message: "Hierarchy Details সফলভাবে সেভ হয়েছে!" });
+    });
+});
+
+// সার্ভার পোর্ট লিসেনিং
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`মাল্টি-সমিতি ব্যাকএন্ড সার্ভার চালু হয়েছে পোর্ট: ${PORT}`));
