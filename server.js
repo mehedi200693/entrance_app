@@ -704,7 +704,7 @@ app.post('/api/close-day-cash', (req, res) => {
 
 // Hierarchy Details সেভ করার API
 app.post('/api/hierarchy-details', (req, res) => {
-    const { 
+    let { 
         hierarchy, 
         name, 
         code, 
@@ -715,6 +715,9 @@ app.post('/api/hierarchy-details', (req, res) => {
         address, 
         contactInformation 
     } = req.body;
+    // তারিখের ফরম্যাট DD-MM-YYYY থেকে YYYY-MM-DD করা হচ্ছে
+establishmentDate = establishmentDate.split('-').reverse().join('-');
+operationDate = operationDate.split('-').reverse().join('-');
 
     const sqlQuery = `INSERT INTO hierarchy_details 
         (hierarchy, name, code, establishment_date, operation_date, activity_status, correction_day_allotment, address, contact_information) 
