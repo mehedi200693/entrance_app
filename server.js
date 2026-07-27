@@ -702,51 +702,76 @@ app.post('/api/close-day-cash', (req, res) => {
     });
 });
 
-// Hierarchy Details সেভ করার API
+// ==========================================
+// 1. Hierarchy Details Create (১ম ট্যাব)
+// ==========================================
+// ডাটা সেভ করা (POST)
 app.post('/api/hierarchy-details', (req, res) => {
-    let { 
-        hierarchy, 
-        name, 
-        code, 
-        establishmentDate, 
-        operationDate, 
-        activityStatus, 
-        correctionDayAllotment, 
-        address, 
-        contactInformation 
-    } = req.body;
-    // তারিখের ফরম্যাট DD-MM-YYYY থেকে YYYY-MM-DD করা হচ্ছে
-establishmentDate = establishmentDate.split('-').reverse().join('-');
-operationDate = operationDate.split('-').reverse().join('-');
+    let { hierarchy, name, code, establishmentDate, operationDate, activityStatus, correctionDayAllotment, address, contactInformation } = req.body;
+    
+    // Date Format Fix (DD-MM-YYYY to YYYY-MM-DD)
+    establishmentDate = establishmentDate.split('-').reverse().join('-');
+    operationDate = operationDate.split('-').reverse().join('-');
 
-    const sqlQuery = `INSERT INTO hierarchy_details 
-        (hierarchy, name, code, establishment_date, operation_date, activity_status, correction_day_allotment, address, contact_information) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
-
-    const values = [
-        hierarchy, name, code, establishmentDate, operationDate, activityStatus, correctionDayAllotment, address, contactInformation
-    ];
-
-    // আপনার ডাটাবেজ কানেকশনের নাম db না হয়ে connection হলে এখানে connection.query লিখবেন
-    db.query(sqlQuery, values, (error, result) => {
-        if (error) {
-            console.error("Database Error:", error);
-            return res.status(500).json({ error: "ডাটা সেভ করতে সমস্যা হয়েছে!" });
-        }
-        res.status(200).json({ message: "Hierarchy Details সফলভাবে সেভ হয়েছে!" });
+    const sqlQuery = "INSERT INTO hierarchy_details (hierarchy, name, code, establishment_date, operation_date, activity_status, correction_day_allotment, address, contact_information) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+    db.query(sqlQuery, [hierarchy, name, code, establishmentDate, operationDate, activityStatus, correctionDayAllotment, address, contactInformation], (err, result) => {
+        if (err) return res.status(500).json({ error: "ডাটা সেভ করতে সমস্যা হয়েছে!" });
+        res.status(200).json({ message: "সফলভাবে সেভ হয়েছে!" });
     });
 });
-// Hierarchy Details ডাটাবেস থেকে খুঁজে বের করার GET API
-app.get('/api/hierarchy-details', (req, res) => {
-  const sqlQuery = "SELECT * FROM hierarchy_details";
 
-  db.query(sqlQuery, (err, results) => {
-    if (err) {
-      console.error("Database Error:", err);
-      return res.status(500).json({ error: "ডাটা লোড করতে সমস্যা হয়েছে!" });
-    }
-    res.status(200).json(results);
-  });
+// ডাটা তুলে আনা (GET) - সার্চের জন্য
+app.get('/api/hierarchy-details', (req, res) => {
+    db.query("SELECT * FROM hierarchy_details", (err, results) => {
+        if (err) return res.status(500).json({ error: "ডাটা লোড করতে সমস্যা!" });
+        res.status(200).json(results);
+    });
+});
+
+// ==========================================
+// 2. Hierarchy Manager Tagging (২য় ট্যাব)
+// ==========================================
+// ম্যানেজার সেভ করা (POST)
+app.post('/api/hierarchy-manager', (req, res) => {
+    let { hierarchyLevel, hierarchyDetails, hName, code, establishmentDate, managerName } = req.body;
+    
+    establishmentDate = establishmentDate.split('-').reverse().join('-');
+
+    const sqlQuery = "INSERT INTO hierarchy_managers (hierarchy_level, hierarchy_details, h_name, code, establishment_date, manager_name) VALUES (?, ?, ?, ?, ?, ?)";
+    db.query(sqlQuery, [hierarchyLevel, hierarchyDetails, hName, code, establishmentDate, managerName], (err, result) => {
+        if (err) return res.status(500).json({ error: "ম্যানেজার ট্যাগ করতে সমস্যা!" });
+        res.status(200).json({ message: "ম্যানেজার সফলভাবে যুক্ত হয়েছে!" });
+    });
+});
+
+// ম্যানেজার লিস্ট তুলে আনা (GET)
+app.get('/api/hierarchy-manager', (req, res) => {
+    db.query("SELECT * FROM hierarchy_managers", (err, results) => {
+        if (err) return res.status(500).json({ error: "ম্যানেজার লোড করতে সমস্যা!" });
+        res.status(200).json(results);
+    });
+});
+
+// ==========================================
+// 3. Hierarchy Management (৩য় ট্যাব)
+// ==========================================
+// চেইন সেভ করা (POST)
+app.post('/api/hierarchy-management', (req, res) => {
+    const { parentLevel, parentDetails, childListId } = req.body;
+    
+    const sqlQuery = "INSERT INTO hierarchy_management (parent_level, parent_details, child_list_id) VALUES (?, ?, ?)";
+    db.query(sqlQuery, [parentLevel, parentDetails, childListId], (err, result) => {
+        if (err) return res.status(500).json({ error: "ম্যানেজমেন্ট সেভ করতে সমস্যা!" });
+        res.status(200).json({ message: "সফলভাবে সেভ হয়েছে!" });
+    });
+});
+
+// চেইন তুলে আনা (GET)
+app.get('/api/hierarchy-management', (req, res) => {
+    db.query("SELECT * FROM hierarchy_management", (err, results) => {
+        if (err) return res.status(500).json({ error: "ডাটা লোড করতে সমস্যা!" });
+        res.status(200).json(results);
+    });
 });
 
 // সার্ভার পোর্ট লিসেনিং
