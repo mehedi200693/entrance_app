@@ -736,6 +736,18 @@ operationDate = operationDate.split('-').reverse().join('-');
         res.status(200).json({ message: "Hierarchy Details সফলভাবে সেভ হয়েছে!" });
     });
 });
+// Hierarchy Details ডাটাবেস থেকে খুঁজে বের করার GET API
+app.get('/api/hierarchy-details', (req, res) => {
+  const sqlQuery = "SELECT * FROM hierarchy_details";
+
+  db.query(sqlQuery, (err, results) => {
+    if (err) {
+      console.error("Database Error:", err);
+      return res.status(500).json({ error: "ডাটা লোড করতে সমস্যা হয়েছে!" });
+    }
+    res.status(200).json(results);
+  });
+});
 
 // সার্ভার পোর্ট লিসেনিং
 const PORT = process.env.PORT || 3000;
