@@ -774,6 +774,35 @@ app.get('/api/hierarchy-management', (req, res) => {
     });
 });
 
+
+// কালেকশন শিটের মেম্বারদের ডেমো/আসল ডাটাবেজ বা অ্যারে
+const collectionSheetMembers = [
+  { sl: '1', softwareId: '83142297474', memberId: '83142297474', memberName: 'Sohag', guardianName: 'Jalal', gender: 'Male', admissionDate: '15-10-2023', fieldOfficer: 'Md. Mehdi Hasan', status: 'Active' },
+  { sl: '2', softwareId: '83162402955', memberId: '83162402955', memberName: 'Rofiq', guardianName: 'Kashem', gender: 'Male', admissionDate: '10-05-2023', fieldOfficer: 'Md. Mehdi Hasan', status: 'Active' },
+];
+
+// সার্চ API এন্ডপয়েন্ট
+app.get('/api/members/search', (req, res) => {
+  const searchQuery = req.query.q; // ফ্লাটার থেকে পাঠানো শেষ ৪ ডিজিট
+
+  if (!searchQuery) {
+    return res.json([]);
+  }
+
+  // মেম্বার আইডির শেষ অংশ (endsWith) বা ম্যাচিং মেম্বার খোঁজা
+  const matchedMembers = collectionSheetMembers.filter(member => 
+    member.memberId.endsWith(searchQuery) || member.memberName.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  res.json(matchedMembers);
+});
+
+// সার্ভার পোর্ট রান করা
+app.post = process.env.PORT || 3000;
+app.listen(app.post, () => {
+  console.log(`Server running on port ${app.post}`);
+});
+
 // সার্ভার পোর্ট লিসেনিং
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`মাল্টি-সমিতি ব্যাকএন্ড সার্ভার চালু হয়েছে পোর্ট: ${PORT}`));
