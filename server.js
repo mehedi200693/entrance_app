@@ -544,36 +544,25 @@ app.get('/api/manager-live-analytics', (req, res) => {
     });
 });
 
-
 // =========================================================================
 // 🔀 ফিক্সড ও আপডেটেড: দৈনিক ক্যাশ বুক সামারি ও মেম্বারভিত্তিক ট্রানজেকশন হিস্টোরি
 // =========================================================================
 app.get('/api/get-daily-cash-summary', (req, res) => {
     const { company_id, date } = req.query;
-
-    // ১. আগের দিনের সমাপনী ক্যাশ (Opening Balance)
     const sqlOpening = `SELECT closing_balance FROM daily_cash_closings WHERE company_id = ? AND date < ? ORDER BY date DESC LIMIT 1`;
-
-    // 💡 ২. ফিক্সড লজিক: কাল্পনিক collections টেবিল বাদ দিয়ে loan_history এবং active_loans জয়েন করে আজকের মাঠের আদায় আনা হচ্ছে
     const sqlCollections = `
         SELECT al.name as member_name, lh.collected as installment_collected, lh.savings as savings_collected 
         FROM loan_history lh
         JOIN active_loans al ON lh.member_id = al.id
         WHERE lh.date = ? AND al.company_id = ? AND lh.type = 'নিয়মিত আদায়'
     `;
-
-    // ৩. ঋণ বিতরণ (active_loans টেবিল থেকে)
     const sqlDisbursements = `SELECT name, disburseAmount FROM active_loans WHERE company_id = ? AND disburseDate = ?`;
-
-    // 💡 ৪. ফিক্সড লজিক: সঞ্চয় উত্তোলনের সময় মেম্বারের নাম পাওয়ার জন্য active_loans এর সাথে জয়েন করা হচ্ছে
     const sqlWithdrawals = `
         SELECT lh.member_id, al.name as member_name, lh.gs_w 
         FROM loan_history lh
         JOIN active_loans al ON lh.member_id = al.id
         WHERE al.company_id = ? AND lh.date = ? AND lh.type = 'সঞ্চয় উত্তোলন'
     `;
-
-    // ৫. অফিসের বিবিধ আয়/ব্যয় (office_transactions টেবিল থেকে)
     const sqlOfficeTx = `SELECT transaction_type, category, amount FROM office_transactions WHERE company_id = ? AND date = ?`;
 
     db.query(sqlOpening, [company_id, date], (err, openingRes) => {
@@ -657,15 +646,9 @@ app.get('/api/get-daily-cash-summary', (req, res) => {
     });
 });
 
-
-// =========================================================================
-// 🆕 নতুন যুক্ত করা API ১: অফিস ভাউচার এন্ট্রি সেভ করার জন্য
-// =========================================================================
 app.post('/api/add-office-transaction', (req, res) => {
     const { company_id, date, transaction_type, category, amount, description } = req.body;
-    
     if(!category || !amount) return res.status(400).json({ error: "খাত এবং টাকার পরিমাণ আবশ্যক!" });
-
     const sql = `INSERT INTO office_transactions (company_id, date, transaction_type, category, amount, description) VALUES (?, ?, ?, ?, ?, ?)`;
     db.query(sql, [company_id || 'COM101', date, transaction_type, category, amount, description || ''], (err, result) => {
         if (err) {
@@ -676,13 +659,8 @@ app.post('/api/add-office-transaction', (req, res) => {
     });
 });
 
-
-// =========================================================================
-// 🆕 নতুন যুক্ত করা API ২: ফাইনাল ডে-ক্লোজ (ক্যাশ লক) করার জন্য
-// =========================================================================
 app.post('/api/close-day-cash', (req, res) => {
     const { company_id, date, opening_balance, total_income, total_expense, closing_balance } = req.body;
-
     const sql = `
         INSERT INTO daily_cash_closings (company_id, date, opening_balance, total_income, total_expense, closing_balance) 
         VALUES (?, ?, ?, ?, ?, ?)
@@ -692,7 +670,6 @@ app.post('/api/close-day-cash', (req, res) => {
         total_expense = VALUES(total_expense),
         closing_balance = VALUES(closing_balance)
     `;
-
     db.query(sql, [company_id || 'COM101', date, opening_balance, total_income, total_expense, closing_balance], (err, result) => {
         if (err) {
             console.error("Day Close Error:", err);
@@ -702,17 +679,10 @@ app.post('/api/close-day-cash', (req, res) => {
     });
 });
 
-// ==========================================
-// 1. Hierarchy Details Create (১ম ট্যাব)
-// ==========================================
-// ডাটা সেভ করা (POST)
 app.post('/api/hierarchy-details', (req, res) => {
     let { hierarchy, name, code, establishmentDate, operationDate, activityStatus, correctionDayAllotment, address, contactInformation } = req.body;
-    
-    // Date Format Fix (DD-MM-YYYY to YYYY-MM-DD)
     establishmentDate = establishmentDate.split('-').reverse().join('-');
     operationDate = operationDate.split('-').reverse().join('-');
-
     const sqlQuery = "INSERT INTO hierarchy_details (hierarchy, name, code, establishment_date, operation_date, activity_status, correction_day_allotment, address, contact_information) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
     db.query(sqlQuery, [hierarchy, name, code, establishmentDate, operationDate, activityStatus, correctionDayAllotment, address, contactInformation], (err, result) => {
         if (err) return res.status(500).json({ error: "ডাটা সেভ করতে সমস্যা হয়েছে!" });
@@ -720,7 +690,6 @@ app.post('/api/hierarchy-details', (req, res) => {
     });
 });
 
-// ডাটা তুলে আনা (GET) - সার্চের জন্য
 app.get('/api/hierarchy-details', (req, res) => {
     db.query("SELECT * FROM hierarchy_details", (err, results) => {
         if (err) return res.status(500).json({ error: "ডাটা লোড করতে সমস্যা!" });
@@ -728,15 +697,9 @@ app.get('/api/hierarchy-details', (req, res) => {
     });
 });
 
-// ==========================================
-// 2. Hierarchy Manager Tagging (২য় ট্যাব)
-// ==========================================
-// ম্যানেজার সেভ করা (POST)
 app.post('/api/hierarchy-manager', (req, res) => {
     let { hierarchyLevel, hierarchyDetails, hName, code, establishmentDate, managerName } = req.body;
-    
     establishmentDate = establishmentDate.split('-').reverse().join('-');
-
     const sqlQuery = "INSERT INTO hierarchy_managers (hierarchy_level, hierarchy_details, h_name, code, establishment_date, manager_name) VALUES (?, ?, ?, ?, ?, ?)";
     db.query(sqlQuery, [hierarchyLevel, hierarchyDetails, hName, code, establishmentDate, managerName], (err, result) => {
         if (err) return res.status(500).json({ error: "ম্যানেজার ট্যাগ করতে সমস্যা!" });
@@ -744,7 +707,6 @@ app.post('/api/hierarchy-manager', (req, res) => {
     });
 });
 
-// ম্যানেজার লিস্ট তুলে আনা (GET)
 app.get('/api/hierarchy-manager', (req, res) => {
     db.query("SELECT * FROM hierarchy_managers", (err, results) => {
         if (err) return res.status(500).json({ error: "ম্যানেজার লোড করতে সমস্যা!" });
@@ -752,13 +714,8 @@ app.get('/api/hierarchy-manager', (req, res) => {
     });
 });
 
-// ==========================================
-// 3. Hierarchy Management (৩য় ট্যাব)
-// ==========================================
-// চেইন সেভ করা (POST)
 app.post('/api/hierarchy-management', (req, res) => {
     const { parentLevel, parentDetails, childListId } = req.body;
-    
     const sqlQuery = "INSERT INTO hierarchy_management (parent_level, parent_details, child_list_id) VALUES (?, ?, ?)";
     db.query(sqlQuery, [parentLevel, parentDetails, childListId], (err, result) => {
         if (err) return res.status(500).json({ error: "ম্যানেজমেন্ট সেভ করতে সমস্যা!" });
@@ -766,7 +723,6 @@ app.post('/api/hierarchy-management', (req, res) => {
     });
 });
 
-// চেইন তুলে আনা (GET)
 app.get('/api/hierarchy-management', (req, res) => {
     db.query("SELECT * FROM hierarchy_management", (err, results) => {
         if (err) return res.status(500).json({ error: "ডাটা লোড করতে সমস্যা!" });
@@ -774,35 +730,141 @@ app.get('/api/hierarchy-management', (req, res) => {
     });
 });
 
-
-// কালেকশন শিটের মেম্বারদের ডেমো/আসল ডাটাবেজ বা অ্যারে
-const collectionSheetMembers = [
-  { sl: '1', softwareId: '83142297474', memberId: '83142297474', memberName: 'Sohag', guardianName: 'Jalal', gender: 'Male', admissionDate: '15-10-2023', fieldOfficer: 'Md. Mehdi Hasan', status: 'Active' },
-  { sl: '2', softwareId: '83162402955', memberId: '83162402955', memberName: 'Rofiq', guardianName: 'Kashem', gender: 'Male', admissionDate: '10-05-2023', fieldOfficer: 'Md. Mehdi Hasan', status: 'Active' },
-];
-
-// সার্চ API এন্ডপয়েন্ট
+// =========================================================================
+// 🆕 ফিক্সড: কালেকশন শিট সার্চ - এখন আর হার্ডকোড ২ জন না, MySQL থেকে আসবে
+// =========================================================================
 app.get('/api/members/search', (req, res) => {
-  const searchQuery = req.query.q; // ফ্লাটার থেকে পাঠানো শেষ ৪ ডিজিট
+  const searchQuery = req.query.q;
+  if (!searchQuery) return res.json([]);
 
-  if (!searchQuery) {
-    return res.json([]);
+  const qLike = `%${searchQuery}%`;
+  // আপনার active_loans এবং members দুই জায়গা থেকেই খুঁজবে
+  const sql = `
+    SELECT al.id as memberId, al.id as softwareId, al.name as memberName, m.guardianName, m.phone
+    FROM active_loans al
+    LEFT JOIN members m ON al.id = m.id
+    WHERE al.id LIKE ? OR al.name LIKE ?
+    UNION
+    SELECT m.id as memberId, m.id as softwareId, m.name as memberName, m.guardianName, m.phone
+    FROM members m
+    WHERE m.id LIKE ? OR m.name LIKE ?
+    LIMIT 20
+  `;
+  db.query(sql, [qLike, qLike, qLike, qLike], (err, results) => {
+    if (err) {
+        console.log(err);
+        return res.status(500).json({ error: "সার্চ এরর" });
+    }
+    // Flutter যাতে আগের মতোই পায়, সেজন্য sl যোগ করে দিলাম
+    const mapped = results.map((r, i) => ({
+        sl: (i+1).toString(),
+        softwareId: r.memberId,
+        memberId: r.memberId,
+        memberName: r.memberName,
+        guardianName: r.guardianName || '',
+        phone: r.phone || '',
+        fieldOfficer: 'Md. Mehdi Hasan',
+        status: 'Active'
+    }));
+    res.json(mapped);
+  });
+});
+
+// =========================================================================
+// 🆕 নতুন যুক্ত: আপনার ছবির মতো Collection Sheet এর জন্য আসল API
+// এই API আপনার ৪টা ছবির সব ঘর (Loan Balance, PA, SC, Due) অটো হিসাব করে দিবে
+// =========================================================================
+app.get('/api/collection-sheet-full', (req, res) => {
+    const samity = req.query.samity || req.query.company_id || 'COM101';
+    // company_id দিয়ে ফিল্টার, আপনার টেবিলে company_id আছে
+    const sql = `
+        SELECT 
+            al.id,
+            al.name,
+            al.disburseDate,
+            al.disburseAmount,
+            al.totalDue,
+            al.targetToday,
+            al.accumulatedDue,
+            al.totalSavings,
+            al.collected,
+            al.savingsInput,
+            m.guardianName,
+            m.phone,
+            m.address
+        FROM active_loans al
+        LEFT JOIN members m ON al.id = m.id
+        WHERE al.status = 'Active' AND (al.company_id = ? OR ? = 'COM101')
+        ORDER BY CAST(al.id AS UNSIGNED) ASC
+    `;
+    db.query(sql, [samity, samity], (err, results) => {
+        if (err) return res.status(500).json({ error: "Collection Sheet আনতে সমস্যা: " + err.message });
+        
+        // এখানে আপনার ছবির মতো হিসাবগুলো বানানো হচ্ছে
+        const enriched = results.map(row => {
+            const totalDue = parseFloat(row.totalDue) || 0;
+            const pa_ratio = 0.8333; // 20% সুদ হলে PA 83.33%
+            
+            // Loan Balance ভাগ
+            const pa_balance = Math.round(totalDue * pa_ratio);
+            const sc_balance = Math.round(totalDue - pa_balance);
+
+            // New Due = আজকের কিস্তি - আজকে যা দিলো
+            const targetToday = parseFloat(row.targetToday) || 0;
+            const collected = parseFloat(row.collected) || 0;
+            const new_due = targetToday > collected ? targetToday - collected : 0;
+
+            return {
+                ...row,
+                // আপনার ছবির কলামগুলো
+                pa_balance: pa_balance,
+                sc_balance: sc_balance,
+                total_balance: totalDue,
+                loan_collection_pa: Math.round(collected * pa_ratio),
+                loan_collection_sc: Math.round(collected * (1-pa_ratio)),
+                new_due: new_due,
+                closing_due: parseFloat(row.accumulatedDue) || 0,
+                // Flutter DataTable এর জন্য
+                loan_pa: pa_balance,
+                loan_sc: sc_balance
+            };
+        });
+
+        res.status(200).json(enriched);
+    });
+});
+// সব ব্রাঞ্চ দেখা
+app.get('/api/branches', async (req, res) => {
+  try {
+    const [rows] = await db.query('SELECT * FROM branches ORDER BY id DESC');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ message: 'Error loading branches' });
   }
-
-  // মেম্বার আইডির শেষ অংশ (endsWith) বা ম্যাচিং মেম্বার খোঁজা
-  const matchedMembers = collectionSheetMembers.filter(member => 
-    member.memberId.endsWith(searchQuery) || member.memberName.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  res.json(matchedMembers);
 });
 
-// সার্ভার পোর্ট রান করা
-app.post = process.env.PORT || 3000;
-app.listen(app.post, () => {
-  console.log(`Server running on port ${app.post}`);
+// নতুন ব্রাঞ্চ সেভ করা
+app.post('/api/branches', async (req, res) => {
+  try {
+    const { branch_code, branch_name, address, mobile, manager_name } = req.body;
+
+    if (!branch_code || !branch_name) {
+      return res.status(400).json({ message: 'Branch Code আর Branch Name লাগবেই' });
+    }
+
+    await db.query(
+      'INSERT INTO branches (branch_code, branch_name, address, mobile, manager_name) VALUES (?,?,?,?,?)',
+      [branch_code, branch_name, address, mobile, manager_name]
+    );
+    res.json({ message: 'Branch Saved' });
+  } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({ message: 'এই Branch Code আগেই আছে' });
+    }
+    res.status(500).json({ message: 'Save failed' });
+  }
 });
 
-// সার্ভার পোর্ট লিসেনিং
+// ✅ একটাই সার্ভার লিসেন - আগের ডাবল লিসেন বাগ ফিক্স করা হলো
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`মাল্টি-সমিতি ব্যাকএন্ড সার্ভার চালু হয়েছে পোর্ট: ${PORT}`));
