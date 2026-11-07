@@ -1,6 +1,6 @@
 console.log("মাল্টি-সমিতি ব্যাকএন্ড সার্ভার চালু হচ্ছে...");
 const express = require('express');
-const mysql = require('mysql2');
+const mysql = require('mysql2/promise');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 
@@ -23,14 +23,14 @@ const db = mysql.createPool({
     }
 });
 
-db.getConnection((err, connection) => {
-    if (err) {
-        console.log("ডাটাবেজ কানেকশনে সমস্যা:", err);
-    } else {
-        console.log("ডাটাবেজプール এর সাথে সফলভাবে কানেক্ট হয়েছে!");
-        connection.release();
-    }
-});
+db.getConnection()
+  .then(connection => {
+    console.log("ডাটাবেজের সাথে সফলভাবে কানেক্ট হয়েছে");
+    connection.release();
+  })
+  .catch(err => {
+    console.log("ডাটাবেজ কানেকশনে সমস্যা:", err);
+  });
 
 // 💡 ফিক্স ১: টার্গেট অ্যামাউন্ট ০ না দেখিয়ে আসল টার্গেট দেখানোর লজিক
 const sanitizeData = (results) => {
