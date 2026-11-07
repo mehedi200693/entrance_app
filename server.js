@@ -73,30 +73,38 @@ app.get('/api/get-next-member-id', (req, res) => {
 });
 
 // 📅 ২. সিস্টেম তারিখ জানার API 
-app.get('/api/get-system-date', (req, res) => {
+app.get('/api/get-system-date', async (req, res) => {
     let companyId = req.query.company_id || 'COM101';
     const sql = "SELECT DATE_FORMAT(system_date, '%Y-%m-%d') as s_date FROM system_settings WHERE company_id = ?";
-    db.query(sql, [companyId], (err, results) => {
-        if (err || results.length === 0) {
+    try {
+        const [results] = await db.query(sql, [companyId]);
+        if (results.length === 0) {
             const fallbackDate = new Date().toISOString().split('T')[0];
             return res.status(200).json({ current_date: fallbackDate, system_date: fallbackDate, date: fallbackDate });
         }
         const dbDate = results[0].s_date;
         res.status(200).json({ current_date: dbDate, system_date: dbDate, date: dbDate });
-    });
+    } catch (err) {
+        console.log("Get System Date Database Error: ", err);
+        return res.status(500).json({ error: "সার্ভার এরর: " + err.message });
+    }
 });
 
 // 📥 ৩. কালেকশন শিট ডাটা API
-app.get('/api/get-collection-data', (req, res) => {
+app.get('/api/get-collection-data', async (req, res) => {
     const sql = "SELECT * FROM active_loans WHERE status = 'Active' AND isSavedToday = 'false'";
-    db.query(sql, (err, results) => {
-        if (err) return res.status(500).json({ error: "ডাটা আনতে সমস্যা হয়েছে।" });
-        res.status(200).json(sanitizeData(results));
-    });
+    try {
+        const [results] = await db.query(sql);
+        
+       return res.status(200).json(sanitizeData(results));
+    } catch (err) {
+        console.log("Get Collection Data Database Error: ", err);
+        return res.status(500).json({ error: "ডাটা আনতে সমস্যা হয়েছে:" + err.message });
+    }
 });
 
-// 3.1 ফিন্যান্সিয়াল রিপোর্ট প্রিন্ট HTML
-app.get('/api/print-financial-report', (req, res) => {
+// 3.1 ফিন্যান্সিয়াল রিপোর্ট প্রিন্ট HTML
+app.get('/api/print-financial-report', async (req, res) => {
     const company_id = req.query.company_id;
     const from_date = req.query.from_date;
     const to_date = req.query.to_date;
@@ -431,22 +439,48 @@ app.post('/api/member/register', (req, res) => {
 });
 
 // 📑 লোন প্রপোজালের জন্য পেন্ডিং সদস্য তালিকা
-app.get('/api/loan-proposals', (req, res) => {
-    const sql = `SELECT id, name FROM members WHERE id NOT IN (SELECT id FROM active_loans) ORDER BY id ASC`;
-    db.query(sql, (err, results) => {
-        if (err) return res.status(500).json({ error: "ডাটাবেজ থেকে প্রপোজাল তালিকা আনা যায়নি" });
-        res.status(200).json(results);
-    });
+// লোন প্রপোজালের জন্য পেন্ডিং সদস্য তালিকা
+app.get('/api/loan-proposals', async (req, res) => {
+  const companyId = req.query.company_id || 'COM101';
+  const currentDate = req.query.current_date; // Flutter থেকে আসা 2026-11-07, এটাই অ্যাপসের সিস্টেম ডেট
+  const strictToday = req.query.strict_today === 'true';
+
+  let sql = "SELECT id, name, admission_date, created_at, date FROM members WHERE id NOT IN (SELECT id FROM active_loans)";
+  let params = [];
+
+  // কোম্পানি ফিল্টার - members টেবিলে company_id কলাম থাকলে
+  // যদি members এ company_id না থাকে তাহলে নিচের ২ লাইন কেটে দিবেন
+  // sql += " AND company_id = ?";
+  // params.push(companyId);
+
+  // শুধুমাত্র অ্যাপসের আজকের তারিখের (সিস্টেম ডেট) সদস্য
+  if (strictToday && currentDate) {
+    sql += " AND (DATE(admission_date) = ? OR DATE(created_at) = ? OR DATE(date) = ?)";
+    params.push(currentDate, currentDate, currentDate);
+  }
+
+  sql += " ORDER BY id ASC";
+
+  try {
+    const [results] = await db.query(sql, params);
+    return res.status(200).json(results);
+  } catch (err) {
+    return res.status(500).json({ error: "ডাটাবেজ থেকে প্রপোজাল তালিকা আনা যায়নি: " + err.message });
+  }
 });
 
 // 💰 লোন প্রপোজাল একটিভ করা 
-app.post('/api/loan/proposal', (req, res) => {
-    const { id, name, disburseDate, disburseAmount, totalDue, targetToday, accumulatedDue, collected, targetWeek, totalPaid, status, type, installmentType, savingsInput, savingsTarget, totalSavings, isSavedToday, isFullPaidSection, company_id } = req.body;
-    const sql = `INSERT INTO active_loans (id, name, disburseDate, disburseAmount, totalDue, targetToday, accumulatedDue, collected, targetWeek, totalPaid, status, type, installmentType, savingsInput, savingsTarget, totalSavings, isSavedToday, isFullPaidSection, company_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name), disburseDate = VALUES(disburseDate), disburseAmount = VALUES(disburseAmount), totalDue = VALUES(totalDue), targetToday = VALUES(targetToday), accumulatedDue = VALUES(accumulatedDue), targetWeek = VALUES(targetWeek), status = 'Active', type = VALUES(type), installmentType = VALUES(installmentType), savingsTarget = VALUES(savingsTarget), totalSavings = COALESCE(totalSavings, 0) + VALUES(totalSavings), collected = 0, totalPaid = 0, savingsInput = 0, isSavedToday = 'false'`;
-    db.query(sql, [id, name, disburseDate, disburseAmount, totalDue, targetToday, accumulatedDue, collected, targetWeek, totalPaid, status, type, installmentType, savingsInput, savingsTarget, totalSavings, isSavedToday, isFullPaidSection, company_id], (err, result) => {
-        if (err) return res.status(500).json({ error: "লোন আপডেট করতে ডাটাবেজ এরর!" });
-        res.status(200).json({ message: "সদস্যের লোন সফলভাবে আপডেট হয়ে কালেকশন শিটে যুক্ত হয়েছে!" });
-    });
+// লোন প্রপোজাল একাউন্ট করা
+app.post('/api/loan/proposal', async (req, res) => {
+  const { id, name, disburseDate, disburseAmount, totalDue, targetToday, accumulatedDue, collected, targetWeek, totalPaid, status, type, installmentType } = req.body;
+  const sql = "INSERT INTO active_loans (id, name, disburseDate, disburseAmount, totalDue, targetToday, accumulatedDue, collected, targetWeek, totalPaid, status, type, installmentType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+  try {
+    await db.query(sql, [id, name, disburseDate, disburseAmount, totalDue, targetToday, accumulatedDue, collected, targetWeek, totalPaid, status, type, installmentType]);
+    return res.status(200).json({ message: "সদস্যের লোন সফলভাবে আপডেট হয়ে কালেকশন শিটে যুক্ত হয়েছে!" });
+  } catch (err) {
+    return res.status(500).json({ error: "লোন আপডেট করতে ডাটাবেজ এরর: " + err.message });
+  }
 });
 
 // 📊 ১১. ডেইলি টপ শিট 
