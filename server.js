@@ -46,17 +46,17 @@ const sanitizeData = (results) => {
     }));
 };
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     const sql = "SELECT company_id, username, name, role FROM users WHERE username = ? AND password = ? AND status = 'Active'";
-    db.query(sql, [username, password], (err, results) => {
-        if (err) {
-            console.log("Login Database Error: ", err);
+    try {
+        const [results] = await db.query(sql, [username, password]);
+        if (results.length === 0) return res.status(401).json({ error: "ইউজার আইডি বা পাসওয়ার্ড ভুল!" });
+        res.status(200).json({ message: "সফল লগইন", user: results[0] });
+    } catch (err) {
+        console.log("Login Database Error: ", err);
             return res.status(500).json({ error: "সার্ভার এরর: " + err.message });
         }
-        if (results.length === 0) return res.status(401).json({ error: "ইউজার আইডি বা পাসওয়ার্ড ভুল!" });
-        res.status(200).json({ message: "সফল লগইন", user: results[0] });
-    });
 });
 
 // 🔢 নতুন সদস্যের সিরিয়াল আইডি তৈরি করার API
