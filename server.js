@@ -358,45 +358,49 @@ app.post('/api/lock-collection', (req, res) => {
 });
 
 // 🔄 ৯. পরবর্তী দিন আপডেট
-app.post('/api/next-day-update', (req, res) => {
-    let { company_id, next_date } = req.body; 
+app.post('/api/next-day-update', async (req, res) => {
+  try {
+    let { company_id, next_date } = req.body;
     let cid = company_id || '101';
 
     const checkCurrentDateSql = "SELECT DATE_FORMAT(system_date, '%Y-%m-%d') as current_system_date FROM system_settings WHERE company_id = ?";
-    db.query(checkCurrentDateSql, [cid], (checkErr, checkResults) => {
-        if (checkErr) return res.status(500).json({ error: "ডাটাবেজ কানেকশন এরর।" });
-        if (checkResults.length === 0) return res.status(404).json({ error: `সিস্টেম তারিখ পাওয়া যায়নি।` });
+    const [checkResults] = await db.query(checkCurrentDateSql, [cid]);
 
-        const currentSystemDate = checkResults[0].current_system_date;
-        if (next_date) {
-            const currentSec = new Date(currentSystemDate).getTime();
-            const nextSec = new Date(next_date).getTime();
-            if (nextSec <= currentSec) return res.status(400).json({ error: `ডেট আগের তারিখের হতে পারবে না।` });
-        }
+    if (checkResults.length === 0) return res.status(404).json({ error: 'সিস্টেম তারিখ পাওয়া যায়নি' });
 
-        const updateAbsentSql = `UPDATE active_loans SET accumulatedDue = accumulatedDue + targetToday WHERE isSavedToday = 'false' AND status = 'Active' AND type != 'Savings Only' AND company_id = ?`;
-        db.query(updateAbsentSql, [cid], (absentErr) => {
-            const resetSheetSql = `UPDATE active_loans SET collected = 0, savingsInput = 0, isSavedToday = 'false' WHERE company_id = ?`;
-            db.query(resetSheetSql, [cid], (resetErr) => {
-                const clearFinalSubmitSql = `DELETE FROM final_collection_submits`; 
-                db.query(clearFinalSubmitSql, () => {
-                    let updateDateSql = '';
-                    let params = [];
-                    if (next_date) {
-                        updateDateSql = `UPDATE system_settings SET system_date = ? WHERE company_id = ?`;
-                        params = [next_date, cid];
-                    } else {
-                        updateDateSql = `UPDATE system_settings SET system_date = DATE_ADD(system_date, INTERVAL 1 DAY) WHERE company_id = ?`;
-                        params = [cid];
-                    }
-                    db.query(updateDateSql, params, (dateErr) => {
-                        if(dateErr) return res.status(500).json({error: "তারিখ আপডেট ব্যর্থ!"});
-                        res.status(200).json({ message: "সফলভাবে ডে-ইন সম্পন্ন হয়েছে!" });
-                    });
-                });
-            });
-        });
-    });
+    const currentSystemDate = checkResults[0].current_system_date;
+    if (next_date) {
+      const currentSec = new Date(currentSystemDate).getTime();
+      const nextSec = new Date(next_date).getTime();
+      if (nextSec <= currentSec) return res.status(400).json({ error: 'ডেট আগের তারিখের হতে পারবে না' });
+    }
+
+    const updateAbsentSql = "UPDATE active_loans SET accumulatedDue = accumulatedDue + targetToday WHERE isSavedToday = 'false' AND status = 'Active' AND company_id = ?";
+    await db.query(updateAbsentSql, [cid]);
+
+    const resetSheetSql = "UPDATE active_loans SET collected = 0, savingsInput = 0, isSavedToday = 'false' WHERE company_id = ?";
+    await db.query(resetSheetSql, [cid]);
+
+    const clearFinalSubmitSql = "DELETE FROM final_collection_submits";
+    await db.query(clearFinalSubmitSql);
+
+    let updateDateSql = '';
+    let params = [];
+    if (next_date) {
+      updateDateSql = "UPDATE system_settings SET system_date = ? WHERE company_id = ?";
+      params = [next_date, cid];
+    } else {
+      updateDateSql = "UPDATE system_settings SET system_date = DATE_ADD(system_date, INTERVAL 1 DAY) WHERE company_id = ?";
+      params = [cid];
+    }
+
+    await db.query(updateDateSql, params);
+    return res.status(200).json({ message: 'সফলভাবে ডে-এন্ড সম্পন্ন হয়েছে' });
+
+  } catch (err) {
+    console.log("next-day-update error:", err);
+    return res.status(500).json({ error: 'তারিখ আপডেটে ব্যর্থ' });
+  }
 });
 
 // 🛠️ ১০. ডে-এন্ড ছাড়াই এমার্জেন্সি সিস্টেম ডেট পরিবর্তনের জন্য
