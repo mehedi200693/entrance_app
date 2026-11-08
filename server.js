@@ -941,7 +941,20 @@ app.post('/api/field-officers', async (req, res) => {
     res.status(200).json({ message: 'Saved' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+app.put('/api/field-officers/:id', async (req, res) => {
+  try {
+    const { branch_code, officer_code, officer_name, mobile } = req.body;
+    await db.query("UPDATE field_officers SET branch_code=?, officer_code=?, officer_name=?, mobile=? WHERE id=?", [branch_code, officer_code, officer_name, mobile, req.params.id]);
+    res.json({ message: 'Updated' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
+app.delete('/api/field-officers/:id', async (req, res) => {
+  try {
+    await db.query("DELETE FROM field_officers WHERE id=?", [req.params.id]);
+    res.json({ message: 'Deleted' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ✅ একটাই সার্ভার লিসেন - আগের ডাবল লিসেন বাগ ফিক্স করা হলো
 const PORT = process.env.PORT || 3000;
