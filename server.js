@@ -927,6 +927,21 @@ app.post('/api/samity', async (req, res) => {
     res.status(500).json({ error: 'Samity save failed' });
   }
 });
+app.get('/api/field-officers', async (req, res) => {
+  try {
+    const [rows] = await db.query("SELECT * FROM field_officers ORDER BY id DESC");
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/field-officers', async (req, res) => {
+  try {
+    const { branch_code, officer_code, officer_name, mobile } = req.body;
+    await db.query("INSERT INTO field_officers (branch_code, officer_code, officer_name, mobile) VALUES (?,?,?,?)", [branch_code, officer_code, officer_name, mobile]);
+    res.status(200).json({ message: 'Saved' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 
 // ✅ একটাই সার্ভার লিসেন - আগের ডাবল লিসেন বাগ ফিক্স করা হলো
 const PORT = process.env.PORT || 3000;
