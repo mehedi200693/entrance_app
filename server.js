@@ -903,9 +903,31 @@ app.post('/api/branches', async (req, res) => {
   }
 });
 // GET Samity List
+// GET Samity List - Branch + Officer + Day + Type দিয়ে ফিল্টার
 app.get('/api/samity', async (req, res) => {
   try {
-    const [rows] = await db.query("SELECT * FROM samity_setup ORDER BY id DESC");
+    const { branch_code, branch, officer_code, day, meeting_day, type, samity_type } = req.query;
+
+    let sql = "SELECT * FROM samity_setup WHERE 1=1";
+    let params = [];
+
+    // Branch ফিল্টার - Flutter থেকে branch_code / branch যেটাই আসুক ধরবে
+    const branchVal = branch_code || branch;
+    if (branchVal) { sql += " AND branch_code = ?"; params.push(branchVal); }
+
+    // Officer ফিল্টার - Collection Sheet থেকে officer_code আসবে
+    if (officer_code) { sql += " AND officer_code = ?"; params.push(officer_code); }
+
+    // Day ফিল্টার - Flutter থেকে day / meeting_day যেটাই আসুক ধরবে
+    const dayVal = meeting_day || day;
+    if (dayVal) { sql += " AND meeting_day = ?"; params.push(dayVal); }
+
+    // Type ফিল্টার - Daily / Weekly
+    const typeVal = samity_type || type;
+    if (typeVal) { sql += " AND samity_type = ?"; params.push(typeVal); }
+
+    sql += " ORDER BY id DESC";
+    const [rows] = await db.query(sql, params);
     res.json(rows);
   } catch (err) {
     console.log(err);
@@ -914,19 +936,25 @@ app.get('/api/samity', async (req, res) => {
 });
 
 // POST Save Samity
+// POST Save Samity
 app.post('/api/samity', async (req, res) => {
   try {
-    const { branch_code, samity_code, samity_name, block_group, leader_name, leader_mobile, meeting_day } = req.body;
+    const { branch_code, officer_code, officer_name, samity_code, samity_name, block_group, leader_name, leader_mobile, meeting_day, samity_type } = req.body;
+
     await db.query(
-      "INSERT INTO samity_setup (branch_code, samity_code, samity_name, block_group, leader_name, leader_mobile, meeting_day) VALUES (?,?,?,?,?,?,?)",
-      [branch_code, samity_code, samity_name, block_group, leader_name, leader_mobile, meeting_day]
+      "INSERT INTO samity_setup (branch_code, officer_code, officer_name, samity_code, samity_name, block_group, leader_name, leader_mobile, meeting_day, samity_type) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      [branch_code, officer_code, officer_name, samity_code, samity_name, block_group, leader_name, leader_mobile, meeting_day, samity_type || 'Weekly']
     );
-    res.status(200).json({ message: 'Samity Saved' });
+    res.json({ message: 'Samity Saved' });
   } catch (err) {
     console.log(err);
-    res.status(500).json({ error: 'Samity save failed' });
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({ message: 'এই Samity Code আগেই আছে' });
+    }
+    res.status(500).json({ message: 'Save failed' });
   }
 });
+
 app.get('/api/field-officers', async (req, res) => {
   try {
     const [rows] = await db.query("SELECT * FROM field_officers ORDER BY id DESC");
