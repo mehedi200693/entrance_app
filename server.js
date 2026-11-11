@@ -815,98 +815,62 @@ app.get('/api/members/search', (req, res) => {
 app.get('/api/collection-sheet-full', (req, res) => {
     const company_id = req.query.company_id || 'COM101';
     const officer_code = (req.query.officer_code || '').toString();
-    // Flutter থেকে officer_name ও আসতে পারে, দুইটাই ধরবো
-    const officer_name_direct = (req.query.officer_name || req.query.officer || '').toString();
-    const samity_code_raw = (req.query.samity_code || req.query.samity || '').toString();
-    const samity_code = samity_code_raw.split(' ')[0]; // "01-001 sapla" -> "01-001"
+    const officer_name = (req.query.officer_name || req.query.officer || '').toString();
+    const samity_code = (req.query.samity_code || req.query.samity || '').toString().split(' ')[0];
 
-    // ১. আগে officer_code থেকে officer_name বের করা
-    const getOfficerName = (cb) => {
-        if (officer_name_direct) return cb(officer_name_direct);
-        if (!officer_code) return cb('');
-        // আপনার field_officers টেবিল থেকে নাম বের করা
-        db.query('SELECT officer_name FROM field_officers WHERE officer_code = ? LIMIT 1', [officer_code], (err, rows) => {
-            if (!err && rows && rows.length > 0) return cb(rows[0].officer_name);
-            // field_officers এ না পাইলে samity টেবিলে খোঁজা
-            db.query('SELECT officer_name FROM samity WHERE officer_code = ? LIMIT 1', [officer_code], (err2, rows2) => {
-                if (!err2 && rows2 && rows2.length > 0) return cb(rows2[0].officer_name);
-                // কিছুই না পাইলে কোডটাকেই নাম ধরে নিবে
-                return cb(officer_code);
-            });
+    let sql = `
+        SELECT 
+            al.id, al.name, al.disburseDate, al.disburseAmount,
+            al.totalDue, al.targetToday, al.accumulatedDue,
+            al.totalSavings, al.collected, al.savingsInput,
+            al.officer_code, al.samity_code, al.samity_name,
+            m.guardianName, m.phone, m.address,
+            m.branch_code, m.samity_code AS m_samity_code, m.field_officer
+        FROM active_loans al
+        LEFT JOIN members m ON al.id = m.id
+        WHERE al.status = 'Active' AND al.company_id = ?
+    `;
+    let params = [company_id];
+
+    // Officer ফিল্টার - এখন active_loans.officer_code দিয়েই হবে, নাম খোঁজা লাগবে না
+    if (officer_code) {
+        sql += ` AND (al.officer_code = ? OR m.field_officer = ?)`;
+        params.push(officer_code, officer_name);
+    }
+
+    // Samity ফিল্টার - দুই টেবিলেই চেক করবে, যেটাতে থাকে সেটাতেই মিলবে
+    if (samity_code) {
+        sql += ` AND (al.samity_code = ? OR m.samity_code = ?)`;
+        params.push(samity_code, samity_code);
+    }
+
+    sql += ` ORDER BY CAST(al.id AS UNSIGNED) ASC`;
+
+    db.query(sql, params, (err, results) => {
+        if (err) return res.status(500).json({ error: "Collection Sheet আনতে সমস্যা: " + err.message });
+
+        const enriched = results.map(row => {
+            const totalDue = parseFloat(row.totalDue) || 0;
+            const pa_ratio = 0.8333;
+            const pa_balance = Math.round(totalDue * pa_ratio);
+            const sc_balance = Math.round(totalDue - pa_balance);
+            const targetToday = parseFloat(row.targetToday) || 0;
+            const collected = parseFloat(row.collected) || 0;
+            const new_due = targetToday > collected ? targetToday - collected : 0;
+            return {
+                ...row,
+                pa_balance: pa_balance,
+                sc_balance: sc_balance,
+                total_balance: totalDue,
+                loan_collection_pa: Math.round(collected * pa_ratio),
+                loan_collection_sc: Math.round(collected * (1-pa_ratio)),
+                new_due: new_due,
+                closing_due: parseFloat(row.accumulatedDue) || 0,
+                loan_pa: pa_balance,
+                loan_sc: sc_balance
+            };
         });
-    };
-
-    getOfficerName((officer_name) => {
-        let sql = `
-            SELECT 
-                al.id,
-                al.name,
-                al.disburseDate,
-                al.disburseAmount,
-                al.totalDue,
-                al.targetToday,
-                al.accumulatedDue,
-                al.totalSavings,
-                al.collected,
-                al.savingsInput,
-                m.guardianName,
-                m.phone,
-                m.address,
-                m.branch_code,
-                m.samity_code,
-                m.field_officer
-            FROM active_loans al
-            LEFT JOIN members m ON al.id = m.id
-            WHERE al.status = 'Active'
-        `;
-        let params = [];
-
-        // Company ফিল্টার
-        if (company_id) {
-            sql += ` AND al.company_id = ?`;
-            params.push(company_id);
-        }
-
-        // Officer ফিল্টার - নাম দিয়ে, কারণ members.field_officer এ নাম থাকে
-        if (officer_name) {
-            sql += ` AND (m.field_officer = ? OR m.field_officer = ?)`;
-            params.push(officer_name, officer_code);
-        }
-
-        // Samity ফিল্টার - এইটাই আসল ফিক্স
-        if (samity_code) {
-            sql += ` AND m.samity_code = ?`;
-            params.push(samity_code);
-        }
-
-        sql += ` ORDER BY CAST(al.id AS UNSIGNED) ASC`;
-
-        db.query(sql, params, (err, results) => {
-            if (err) return res.status(500).json({ error: "Collection Sheet আনতে সমস্যা: " + err.message });
-
-            const enriched = results.map(row => {
-                const totalDue = parseFloat(row.totalDue) || 0;
-                const pa_ratio = 0.8333;
-                const pa_balance = Math.round(totalDue * pa_ratio);
-                const sc_balance = Math.round(totalDue - pa_balance);
-                const targetToday = parseFloat(row.targetToday) || 0;
-                const collected = parseFloat(row.collected) || 0;
-                const new_due = targetToday > collected ? targetToday - collected : 0;
-                return {
-                    ...row,
-                    pa_balance: pa_balance,
-                    sc_balance: sc_balance,
-                    total_balance: totalDue,
-                    loan_collection_pa: Math.round(collected * pa_ratio),
-                    loan_collection_sc: Math.round(collected * (1-pa_ratio)),
-                    new_due: new_due,
-                    closing_due: parseFloat(row.accumulatedDue) || 0,
-                    loan_pa: pa_balance,
-                    loan_sc: sc_balance
-                };
-            });
-            res.status(200).json(enriched);
-        });
+        res.status(200).json(enriched);
     });
 });
 // সব ব্রাঞ্চ দেখা
