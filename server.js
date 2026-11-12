@@ -422,24 +422,24 @@ app.post('/api/db-update', (req, res) => {
 });
 
 // 📝 নতুন সদস্য ভর্তি এবং পুরাতন রানিং সদস্য এন্ট্রি লজিক API
-app.post('/api/member/register', (req, res) => {
-    const { id, name, guardianName, phone, address, isOldMember, totalSavings, totalDue, disburseAmount, disburseDate, company_id } = req.body;
-    const memberSql = "INSERT INTO members (id, name, guardianName, phone, address) VALUES (?, ?, ?, ?, ?)";
+app.post('/api/member/register', async (req, res) => {
+    const { id, name, guardianName, phone, address, isOldMember, totalSavings, totalDue, disburseAmount, disburseDate, company_id, branch_code, samity_code, samity_name, officer_code, officer_name, field_officer } = req.body;
     
-    db.query(memberSql, [id, name, guardianName, phone, address], (err) => {
-        if (err) return res.status(500).json({ error: "ডাটাবেজে সদস্য সেভ করতে ব্যর্থ!" });
+    const finalOfficer = field_officer || officer_name || '';
+    
+    try {
+      await db.query("INSERT INTO members (id, name, guardianName, phone, address, branch_code, samity_code, field_officer) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [id, name, guardianName, phone, address, branch_code || null, samity_code || null, finalOfficer]);
 
-        if (isOldMember === true || isOldMember === 'true') {
-            const finalCompanyId = company_id || 'COM101';
-            const loanSql = `INSERT INTO active_loans (\`id\`, \`name\`, \`disburseDate\`, \`disburseAmount\`, \`totalDue\`, \`targetToday\`, \`accumulatedDue\`, \`collected\`, \`targetWeek\`, \`totalPaid\`, \`status\`, \`type\`, \`installmentType\`, \`savingsInput\`, \`savingsTarget\`, \`totalSavings\`, \`isSavedToday\`, \`isFullPaidSection\`, \`company_id\`) VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 'Active', 'Regular', 'Daily', 0, 0, ?, 'false', 'false', ?)`;
-            db.query(loanSql, [id, name, disburseDate, disburseAmount, totalDue, totalSavings, finalCompanyId], (loanErr) => {
-                if (loanErr) return res.status(500).json({ error: "পুরাতন লোন শিটে ডিরেক্ট সচল করতে সমস্যা হয়েছে!" });
-                return res.status(200).json({ message: "পুরাতন রানিং সদস্য সরাসরি একটিভ লোন কালেকশন শিটে যোগ হয়েছে!" });
-            });
-        } else {
-            return res.status(200).json({ message: "নতুন সদস্য সফলভাবে রেজিস্টার হয়েছে!" });
-        }
-    });
+      if (isOldMember === true || isOldMember === 'true') {
+        const finalCompanyId = company_id || 'COM101';
+        await db.query(`INSERT INTO active_loans (\`id\`, \`name\`, \`disburseDate\`, \`disburseAmount\`, \`totalDue\`, \`targetToday\`, \`accumulatedDue\`, \`collected\`, \`targetWeek\`, \`totalPaid\`, \`status\`, \`type\`, \`installmentType\`, \`savingsInput\`, \`savingsTarget\`, \`totalSavings\`, \`isSavedToday\`, \`isFullPaidSection\`, \`company_id\`, \`branch_code\`, \`samity_code\`, \`samity_name\`, \`officer_code\`) VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 'Active', 'Regular', 'Daily', 0, 0, ?, 'false', 'false', ?, ?, ?, ?, ?)`,
+          [id, name, disburseDate, disburseAmount, totalDue, totalSavings, finalCompanyId, branch_code || null, samity_code || null, samity_name || null, officer_code || null]);
+      }
+      res.status(200).json({ message: "সদস্য সফলভাবে রেজিস্টার হয়েছে!" });
+    } catch (err) {
+      res.status(500).json({ error: "ডাটাবেজে সদস্য সেভ করতে ব্যর্থ! " + err.message });
+    }
 });
 
 // 📑 লোন প্রপোজালের জন্য পেন্ডিং সদস্য তালিকা
@@ -959,7 +959,15 @@ app.post('/api/samity', async (req, res) => {
 
 app.get('/api/field-officers', async (req, res) => {
   try {
-    const [rows] = await db.query("SELECT * FROM field_officers ORDER BY id DESC");
+    const branch_code = (req.query.branch_code || req.query.branch || '').toString();
+    let sql = "SELECT * FROM field_officers WHERE 1=1";
+    let params = [];
+    if (branch_code) {
+      sql += " AND branch_code = ?";
+      params.push(branch_code);
+    }
+    sql += " ORDER BY officer_name ASC";
+    const [rows] = await db.query(sql, params);
     res.json(rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
