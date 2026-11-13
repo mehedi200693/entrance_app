@@ -941,7 +941,9 @@ app.get('/api/samity', async (req, res) => {
 // POST Save Samity
 app.post('/api/samity', async (req, res) => {
   try {
-    const { branch_code, officer_code, officer_name, samity_code, samity_name, block_group, leader_name, leader_mobile, meeting_day, samity_type } = req.body;
+    const branch_code = (req.body.branch_code || req.body.branch || '').toString().split(' ')[0];
+    const meeting_day = req.body.meeting_day || req.body.samity_day || null;
+    const { officer_code, officer_name, samity_code, samity_name, block_group, leader_name, samity_type } = req.body;
 
     await db.query(
       "INSERT INTO samity_setup (branch_code, officer_code, officer_name, samity_code, samity_name, block_group, leader_name, leader_mobile, meeting_day, samity_type) VALUES (?,?,?,?,?,?,?,?,?,?)",
