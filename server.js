@@ -1003,6 +1003,21 @@ app.delete('/api/field-officers/:id', async (req, res) => {
     res.json({ message: 'Deleted' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+// FINAL DELETE - Samity
+app.delete('/api/samity/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    console.log("DELETE Samity id:", id);
+    const [result] = await db.query("DELETE FROM samity_setup WHERE id = ?", [id]);
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'এই সমিতি পাওয়া যায় নাই' });
+    }
+    res.json({ message: 'Samity Deleted' });
+  } catch (err) {
+    console.log("samity delete error:", err);
+    res.status(500).json({ message: "samity delete error: " + err.message });
+  }
+});
 
 // ✅ একটাই সার্ভার লিসেন - আগের ডাবল লিসেন বাগ ফিক্স করা হলো
 const PORT = process.env.PORT || 3000;
