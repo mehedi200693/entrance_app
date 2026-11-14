@@ -951,11 +951,11 @@ app.post('/api/samity', async (req, res) => {
     );
     res.json({ message: 'Samity Saved' });
   } catch (err) {
-    console.log(err);
+    console.log("samity save error:", err);
     if (err.code === 'ER_DUP_ENTRY') {
       return res.status(400).json({ message: 'এই Samity Code আগেই আছে' });
     }
-    res.status(500).json({ message: 'Save failed' });
+    res.status(500).json({ message: "samity save error: " + err.message });
   }
 });
 
