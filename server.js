@@ -941,9 +941,17 @@ app.get('/api/samity', async (req, res) => {
 // POST Save Samity
 app.post('/api/samity', async (req, res) => {
   try {
-    const branch_code = (req.body.branch_code || req.body.branch || '').toString().split(' ')[0];
-    const meeting_day = req.body.meeting_day || req.body.samity_day || null;
-    const { officer_code, officer_name, samity_code, samity_name, block_group, leader_name, samity_type } = req.body;
+    // ঠিক - সবগুলা নাম মিলায় দিলাম
+const branch_code = (req.body.branch_code || req.body.branch || '').toString().split(' ')[0];
+const officer_code = req.body.officer_code || '';
+const officer_name = req.body.officer_name || '';
+const samity_code = req.body.samity_code || '';
+const samity_name = req.body.samity_name || '';
+const block_group = req.body.block_group || '';
+const leader_name = req.body.leader_name || '';
+const leader_mobile = req.body.leader_mobile || ''; // এই লাইনটাই ছিল না, এইটাই আসল রোগ
+const meeting_day = req.body.meeting_day || req.body.samity_day || '';
+const samity_type = req.body.samity_type || 'Weekly';
 
     await db.query(
       "INSERT INTO samity_setup (branch_code, officer_code, officer_name, samity_code, samity_name, block_group, leader_name, leader_mobile, meeting_day, samity_type) VALUES (?,?,?,?,?,?,?,?,?,?)",
