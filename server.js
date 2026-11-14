@@ -422,26 +422,61 @@ app.post('/api/db-update', (req, res) => {
 });
 
 // 📝 নতুন সদস্য ভর্তি এবং পুরাতন রানিং সদস্য এন্ট্রি লজিক API
+// 📝 নতুন সদস্য ভর্তি এবং পুরাতন রানিং সদস্য এন্ট্রি লজিক API
 app.post('/api/member/register', async (req, res) => {
-    const { id, name, guardianName, phone, address, isOldMember, totalSavings, totalDue, disburseAmount, disburseDate, company_id, branch_code, samity_code, samity_name, officer_code, officer_name, field_officer } = req.body;
-    
-    const finalOfficer = field_officer || officer_name || '';
-    
-    try {
-      await db.query("INSERT INTO members (id, name, guardianName, phone, address, branch_code, samity_code, field_officer) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [id, name, guardianName, phone, address, branch_code || null, samity_code || null, finalOfficer]);
+  try {
+    // 1. Flutter যেই নামেই পাঠাক, সব নাম ধরো - না হইলে branch/samity NULL যাবে
+    const branch_code = req.body.branch_code || req.body.branchCode || req.body.branch || null;
+    const samity_code = req.body.samity_code || req.body.samityCode || req.body.samity || null;
+    const field_officer = req.body.field_officer || req.body.officer_name || req.body.officer || req.body.fieldOfficer || '';
+    const finalOfficer = field_officer;
 
-      if (isOldMember === true || isOldMember === 'true') {
-        const finalCompanyId = company_id || 'COM101';
-        await db.query(`INSERT INTO active_loans (\`id\`, \`name\`, \`disburseDate\`, \`disburseAmount\`, \`totalDue\`, \`targetToday\`, \`accumulatedDue\`, \`collected\`, \`targetWeek\`, \`totalPaid\`, \`status\`, \`type\`, \`installmentType\`, \`savingsInput\`, \`savingsTarget\`, \`totalSavings\`, \`isSavedToday\`, \`isFullPaidSection\`, \`company_id\`, \`branch_code\`, \`samity_code\`, \`samity_name\`, \`officer_code\`) VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 'Active', 'Regular', 'Daily', 0, 0, ?, 'false', 'false', ?, ?, ?, ?, ?)`,
-          [id, name, disburseDate, disburseAmount, totalDue, totalSavings, finalCompanyId, branch_code || null, samity_code || null, samity_name || null, officer_code || null]);
-      }
-      res.status(200).json({ message: "সদস্য সফলভাবে রেজিস্টার হয়েছে!" });
-    } catch (err) {
-      res.status(500).json({ error: "ডাটাবেজে সদস্য সেভ করতে ব্যর্থ! " + err.message });
+    let { name, guardianName, phone, address, isOldMember, totalSavings, totalDue, disburseDate, disburseAmount, company_id } = req.body;
+
+    // ফোনের মাইনাস / স্পেস কেটে দাও
+    phone = (phone || '').toString().replace(/[^0-9+]/g, '').replace(/^\+?880/, '0');
+
+    if (!name) return res.status(400).json({ error: 'নাম দিতে হবে' });
+
+    // 2. অটো ১১ ডিজিটের Member ID - এইটাই আপনার চাওয়া জিনিস
+    let id = (req.body.id || '').toString().trim();
+
+    if (!id) {
+      // ডাটাবেজে এখন সবচেয়ে বড় ১১ ডিজিটের ID কত, ওইটা খুঁজো
+      // খালি id / rasel এর স্পেস ওয়ালা id কে বাদ দাও
+      const [rows] = await db.query(
+        "SELECT MAX(CAST(id AS UNSIGNED)) as maxId FROM members WHERE id REGEXP '^[0-9]+$'"
+      );
+      let maxId = rows[0]?.maxId || 0;
+
+      // যদি টেবিল একদম খালি হয়, তাহলে এইখান থেকে শুরু হবে
+      if (maxId === 0) maxId = 83068000000;
+
+      // পরের সিরিয়াল = আগেরটা + 1, যেমন 8306857295 -> 8306857296
+      const nextId = Number(maxId) + 1;
+      id = String(nextId).padStart(11, '0');
+      console.log("Auto Member ID Generated:", id, "Previous Max:", maxId);
     }
-});
 
+    await db.query("INSERT INTO members (id, name, guardianName, phone, address, branch_code, samity_code, field_officer) VALUES (?,?,?,?,?,?,?,?)",
+      [id, name, guardianName, phone, address, branch_code, samity_code, finalOfficer]);
+
+    if (isOldMember === true || isOldMember === 'true') {
+      const finalCompanyId = company_id || 'COM101';
+      await db.query(`INSERT INTO active_loans (\`id\`, \`name\`, \`disburseDate\`, \`disburseAmount\`, \`totalDue\`, \`totalSavings\`, \`company_id\`, \`branch_code\`, \`samity_code\`) VALUES (?,?,?,?,?,?,?,?,?)`,
+        [id, name, disburseDate, disburseAmount, totalDue, totalSavings, finalCompanyId, branch_code, samity_code]);
+    }
+
+    // 3. নতুন ID টা অ্যাপকে ফেরত দাও
+    res.status(200).json({ message: "সদস্য সফলভাবে রেজিস্টার হয়েছে!", id: id, member_id: id });
+  } catch (err) {
+    console.log("member register error:", err);
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(500).json({ error: "এই ID টা আগে আছে, আবার SAVE দেন, নতুন ID হয়ে যাবে" });
+    }
+    res.status(500).json({ error: "ডাটাবেজে সদস্য সেভ করতে ব্যর্থ! " + err.message });
+  }
+});
 // 📑 লোন প্রপোজালের জন্য পেন্ডিং সদস্য তালিকা
 // লোন প্রপোজালের জন্য পেন্ডিং সদস্য তালিকা
 app.get('/api/loan-proposals', async (req, res) => {
