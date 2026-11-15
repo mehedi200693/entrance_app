@@ -479,46 +479,67 @@ app.post('/api/member/register', async (req, res) => {
 });
 // 📑 লোন প্রপোজালের জন্য পেন্ডিং সদস্য তালিকা
 // লোন প্রপোজালের জন্য পেন্ডিং সদস্য তালিকা
-app.get('/api/loan-proposals', async (req, res) => {
-  const companyId = req.query.company_id || 'COM101';
-  const currentDate = req.query.current_date; // Flutter থেকে আসা 2026-11-07, এটাই অ্যাপসের সিস্টেম ডেট
-  const strictToday = req.query.strict_today === 'true';
+// ===== LOAN PROPOSAL SYSTEM =====
 
-  let sql = "SELECT id, name, admission_date, created_at, date FROM members WHERE id NOT IN (SELECT id FROM active_loans)";
-  let params = [];
-
-  // কোম্পানি ফিল্টার - members টেবিলে company_id কলাম থাকলে
-  // যদি members এ company_id না থাকে তাহলে নিচের ২ লাইন কেটে দিবেন
-  // sql += " AND company_id = ?";
-  // params.push(companyId);
-
-  // শুধুমাত্র অ্যাপসের আজকের তারিখের (সিস্টেম ডেট) সদস্য
-  if (strictToday && currentDate) {
-    sql += " AND (DATE(admission_date) = ? OR DATE(created_at) = ? OR DATE(date) = ?)";
-    params.push(currentDate, currentDate, currentDate);
-  }
-
-  sql += " ORDER BY id ASC";
-
+// ১. Active Member খোঁজা - Loan এর জন্য
+app.get('/api/members/active-search', async (req, res) => {
   try {
-    const [results] = await db.query(sql, params);
-    return res.status(200).json(results);
+    const { q } = req.query;
+    let query = "SELECT * FROM members WHERE status = 'Active'";
+    let params = [];
+    if (q) {
+      query += " AND (id LIKE ? OR name LIKE ? OR phone LIKE ?)";
+      params.push(`%${q}%`, `%${q}%`, `%${q}%`);
+    }
+    query += " ORDER BY name ASC LIMIT 20";
+    const [rows] = await pool.query(query, params);
+    res.json(rows);
   } catch (err) {
-    return res.status(500).json({ error: "ডাটাবেজ থেকে প্রপোজাল তালিকা আনা যায়নি: " + err.message });
+    console.error(err);
+    res.status(500).json({ error: 'Search failed' });
   }
 });
 
-// 💰 লোন প্রপোজাল একটিভ করা 
-// লোন প্রপোজাল একাউন্ট করা
-app.post('/api/loan/proposal', async (req, res) => {
-  const { id, name, disburseDate, disburseAmount, totalDue, targetToday, accumulatedDue, collected, targetWeek, totalPaid, status, type, installmentType } = req.body;
-  const sql = "INSERT INTO active_loans (id, name, disburseDate, disburseAmount, totalDue, targetToday, accumulatedDue, collected, targetWeek, totalPaid, status, type, installmentType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-
+// ২. নতুন Loan Proposal জমা দেওয়া
+app.post('/api/loan-proposals', async (req, res) => {
   try {
-    await db.query(sql, [id, name, disburseDate, disburseAmount, totalDue, targetToday, accumulatedDue, collected, targetWeek, totalPaid, status, type, installmentType]);
-    return res.status(200).json({ message: "সদস্যের লোন সফলভাবে আপডেট হয়ে কালেকশন শিটে যুক্ত হয়েছে!" });
+    const { member_id, member_name, branch_code, samity_code, loan_amount, installment_type, total_installments, service_charge_percent, gs_amount } = req.body;
+    const [result] = await pool.query(
+      `INSERT INTO loan_proposals (member_id, member_name, branch_code, samity_code, loan_amount, installment_type, total_installments, service_charge_percent, gs_amount, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`,
+      [member_id, member_name, branch_code, samity_code, loan_amount, installment_type, total_installments, service_charge_percent, gs_amount]
+    );
+    res.json({ message: 'Proposal Created', id: result.insertId });
   } catch (err) {
-    return res.status(500).json({ error: "লোন আপডেট করতে ডাটাবেজ এরর: " + err.message });
+    console.error(err);
+    res.status(500).json({ error: 'Proposal failed' });
+  }
+});
+
+// ৩. সব Proposal এর লিস্ট
+app.get('/api/loan-proposals', async (req, res) => {
+  try {
+    const { status } = req.query;
+    let query = "SELECT * FROM loan_proposals WHERE 1=1";
+    let params = [];
+    if (status && status != 'All') { query += " AND status = ?"; params.push(status); }
+    query += " ORDER BY created_at DESC";
+    const [rows] = await pool.query(query, params);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Fetch failed' });
+  }
+});
+
+// ৪. Approve / Reject
+app.put('/api/loan-proposals/:id/:action', async (req, res) => {
+  try {
+    const { id, action } = req.params; // action = approve / reject
+    const newStatus = action === 'approve' ? 'Approved' : 'Rejected';
+    await pool.query("UPDATE loan_proposals SET status = ? WHERE id = ?", [newStatus, id]);
+    res.json({ message: newStatus });
+  } catch (err) {
+    res.status(500).json({ error: 'Update failed' });
   }
 });
 
@@ -1053,6 +1074,7 @@ app.delete('/api/samity/:id', async (req, res) => {
     res.status(500).json({ message: "samity delete error: " + err.message });
   }
 });
+
 
 // ✅ একটাই সার্ভার লিসেন - আগের ডাবল লিসেন বাগ ফিক্স করা হলো
 const PORT = process.env.PORT || 3000;
