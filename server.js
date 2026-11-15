@@ -484,19 +484,23 @@ app.post('/api/member/register', async (req, res) => {
 // ১. Active Member খোঁজা - Loan এর জন্য
 app.get('/api/members/active-search', async (req, res) => {
   try {
-    const { q } = req.query;
-    let query = "SELECT * FROM members WHERE status = 'Active'";
-    let params = [];
-    if (q) {
-      query += " AND (id LIKE ? OR name LIKE ? OR phone LIKE ?)";
-      params.push(`%${q}%`, `%${q}%`, `%${q}%`);
-    }
-    query += " ORDER BY name ASC LIMIT 20";
-    const [rows] = await pool.query(query, params);
+    const q = req.query.q || '';
+    console.log('Search for:', q);
+
+    // শুধু দরকারি কলামগুলোই নিচ্ছি, SELECT * না
+    const [rows] = await pool.query(
+      `SELECT id, name, phone, branch_code, samity_code, status 
+       FROM members 
+       WHERE status = 'Active' 
+       AND (CAST(id AS CHAR) LIKE ? OR name LIKE ? OR phone LIKE ?)
+       ORDER BY name ASC LIMIT 20`,
+      [`%${q}%`, `%${q}%`, `%${q}%`]
+    );
+    console.log('Found:', rows.length);
     res.json(rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Search failed' });
+    console.error('SEARCH ERROR:', err.message);
+    res.status(500).json({ error: 'Search failed', detail: err.message });
   }
 });
 
