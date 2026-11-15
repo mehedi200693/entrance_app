@@ -477,18 +477,14 @@ app.post('/api/member/register', async (req, res) => {
     res.status(500).json({ error: "ডাটাবেজে সদস্য সেভ করতে ব্যর্থ! " + err.message });
   }
 });
-// 📑 লোন প্রপোজালের জন্য পেন্ডিং সদস্য তালিকা
-// লোন প্রপোজালের জন্য পেন্ডিং সদস্য তালিকা
+// ===== LOAN PROPOSAL SYSTEM =====
 // ===== LOAN PROPOSAL SYSTEM =====
 
 // ১. Active Member খোঁজা - Loan এর জন্য
 app.get('/api/members/active-search', async (req, res) => {
   try {
     const q = req.query.q || '';
-    console.log('Search for:', q);
-
-    // শুধু দরকারি কলামগুলোই নিচ্ছি, SELECT * না
-    const [rows] = await pool.query(
+    const [rows] = await db.query(
       `SELECT id, name, phone, branch_code, samity_code, status 
        FROM members 
        WHERE status = 'Active' 
@@ -496,7 +492,6 @@ app.get('/api/members/active-search', async (req, res) => {
        ORDER BY name ASC LIMIT 20`,
       [`%${q}%`, `%${q}%`, `%${q}%`]
     );
-    console.log('Found:', rows.length);
     res.json(rows);
   } catch (err) {
     console.error('SEARCH ERROR:', err.message);
@@ -508,7 +503,7 @@ app.get('/api/members/active-search', async (req, res) => {
 app.post('/api/loan-proposals', async (req, res) => {
   try {
     const { member_id, member_name, branch_code, samity_code, loan_amount, installment_type, total_installments, service_charge_percent, gs_amount } = req.body;
-    const [result] = await pool.query(
+    const [result] = await db.query(
       `INSERT INTO loan_proposals (member_id, member_name, branch_code, samity_code, loan_amount, installment_type, total_installments, service_charge_percent, gs_amount, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`,
       [member_id, member_name, branch_code, samity_code, loan_amount, installment_type, total_installments, service_charge_percent, gs_amount]
@@ -528,7 +523,7 @@ app.get('/api/loan-proposals', async (req, res) => {
     let params = [];
     if (status && status != 'All') { query += " AND status = ?"; params.push(status); }
     query += " ORDER BY created_at DESC";
-    const [rows] = await pool.query(query, params);
+    const [rows] = await db.query(query, params);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: 'Fetch failed' });
@@ -538,15 +533,14 @@ app.get('/api/loan-proposals', async (req, res) => {
 // ৪. Approve / Reject
 app.put('/api/loan-proposals/:id/:action', async (req, res) => {
   try {
-    const { id, action } = req.params; // action = approve / reject
+    const { id, action } = req.params;
     const newStatus = action === 'approve' ? 'Approved' : 'Rejected';
-    await pool.query("UPDATE loan_proposals SET status = ? WHERE id = ?", [newStatus, id]);
+    await db.query("UPDATE loan_proposals SET status = ? WHERE id = ?", [newStatus, id]);
     res.json({ message: newStatus });
   } catch (err) {
     res.status(500).json({ error: 'Update failed' });
   }
 });
-
 // 📊 ১১. ডেইলি টপ শিট 
 app.get('/api/get-top-sheet-data', (req, res) => {
     let { company_id, target_date } = req.query;
