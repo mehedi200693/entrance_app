@@ -1072,6 +1072,40 @@ app.delete('/api/samity/:id', async (req, res) => {
     res.status(500).json({ message: "samity delete error: " + err.message });
   }
 });
+// ===== LOAN DISBURSE SYSTEM =====
+app.get('/api/loan-proposals-approved', async (req, res) => {
+  try {
+    const [rows] = await db.query("SELECT * FROM loan_proposals WHERE status = 'Approved' ORDER BY created_at DESC");
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/loan-disburse', async (req, res) => {
+  try {
+    const { proposal_id, member_id, member_name, loan_amount, loan_type, disburse_date } = req.body;
+    const amount = parseFloat(loan_amount);
+
+    // আপনার ফাইনাল নিয়ম
+    let profitPercent = loan_type === 'Weekly' ? 40 : 20;
+    let totalInstallments = loan_type === 'Weekly' ? 28 : 120;
+    let totalDue = amount + (amount * profitPercent / 100);
+    let targetToday = Math.round(totalDue / totalInstallments);
+    let vsAmount = amount * 0.05; // VS 5% - একবারই ফিক্সড
+    let gsAmount = amount * 0.05; // GS 5% - শুরুতে
+
+    await db.query(
+      `INSERT INTO active_loans (id, name, disburseDate, disburseAmount, totalDue, targetToday, vs_savings, gs_savings, totalSavings, loan_type, status, company_id, isSavedToday) 
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,'COM101','false')`,
+      [member_id, member_name, disburse_date, amount, totalDue, targetToday, vsAmount, gsAmount, gsAmount, loan_type, 'Active']
+    );
+
+    await db.query("UPDATE loan_proposals SET status = 'Disbursed' WHERE id = ?", [proposal_id]);
+    res.json({ message: 'Disburse সফল হয়েছে!', totalDue, targetToday, vsAmount });
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ error: 'Disburse failed: ' + err.message });
+  }
+});
 
 
 // ✅ একটাই সার্ভার লিসেন - আগের ডাবল লিসেন বাগ ফিক্স করা হলো
