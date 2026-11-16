@@ -502,11 +502,11 @@ app.get('/api/members/active-search', async (req, res) => {
 // ২. নতুন Loan Proposal জমা দেওয়া
 app.post('/api/loan-proposals', async (req, res) => {
   try {
-    const { member_id, member_name, branch_code, samity_code, loan_amount, installment_type, total_installments, service_charge_percent, gs_amount } = req.body;
+    const { member_id, member_name, branch_code, samity_code, loan_amount, installment_type, total_installments, service_charge_percent, vs_amount, gs_amount } = req.body;
     const [result] = await db.query(
-      `INSERT INTO loan_proposals (member_id, member_name, branch_code, samity_code, loan_amount, installment_type, total_installments, service_charge_percent, gs_amount, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`,
-      [member_id, member_name, branch_code, samity_code, loan_amount, installment_type, total_installments, service_charge_percent, gs_amount]
+      `INSERT INTO loan_proposals (member_id, member_name, branch_code, samity_code, loan_amount, installment_type, total_installments, service_charge_percent, vs_amount, gs_amount, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`,
+      [member_id, member_name, branch_code, samity_code, loan_amount, installment_type, total_installments, service_charge_percent, vs_amount, gs_amount]
     );
     res.json({ message: 'Proposal Created', id: result.insertId });
   } catch (err) {
