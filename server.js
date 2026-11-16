@@ -212,18 +212,10 @@ app.post('/api/save-draft-collection', (req, res) => {
     members.forEach((member) => {
         const kisti = parseFloat(member.collected || member.installment_collected || 0);
         const sanchay = parseFloat(member.savingsInput || member.savings_collected || 0);
-        // 🟢 নতুন: VS আর ক্লোজিং ডিউ - Flutter থেকে এখন এই ২টা আসবে
-        const vsAmt = parseFloat(member.vsInput || member.vs_collected || 0);
-        const targetToday = parseFloat(member.targetToday || 0);
-        // 🟢 নতুন: ক্লোজিং ডিউ হিসাব - Flutter থেকে আসলে ওইটাই, না আসলে হিসাব করে নিবে
-        // আগের accumulatedDue + আজকের টার্গেট - আজকের আদায়
-        const closingDue = member.closing_due !== undefined ? parseFloat(member.closing_due) : 0;
-        const newDue = parseFloat(member.new_due || targetToday || 0);
+        const closingDue = member.closing_due !== undefined ? parseFloat(member.closing_due) : parseFloat(member.accumulatedDue || 0);
 
-        // 🟢 সংশোধন: UPDATE এ vsInput আর accumulatedDue যোগ করছি, আগেরগুলা ঠিক রাখছি
-        // accumulatedDue = closingDue, যাতে পরের দিন এইটাই previous_due হয়ে আসে
-        const sql = `UPDATE active_loans SET collected = ?, savingsInput = ?, vsInput = ?, accumulatedDue = ?, isSavedToday = 'true' WHERE id = ?`;
-        db.query(sql, [kisti, sanchay, vsAmt, closingDue, member.id], (err) => {
+        const sql = `UPDATE active_loans SET collected = ?, savingsInput = ?, accumulatedDue = ?, isSavedToday = 'true' WHERE id = ?`;
+        db.query(sql, [kisti, sanchay, closingDue, member.id], (err) => {
             if (err) hasError = true;
             completedQueries++;
             if (completedQueries === members.length) {
@@ -887,24 +879,18 @@ app.get('/api/collection-sheet-full', (req, res) => {
             al.totalSavings, al.collected, al.savingsInput,
             al.officer_code, al.samity_code, al.samity_name,
             m.guardianName, m.phone, m.address,
-            m.branch_code, m.samity_code AS m_samity_code, m.field_officer,
-            // 🟢 নতুন ৩টা - Flutter এই ৩টা চায়, নাহলে ০ দেখাবে
-            COALESCE(al.vsInput, 0) AS vsInput,
-            COALESCE(al.gs_balance, al.totalSavings, 0) AS gs_balance,
-            COALESCE(m.vs_amount, al.vs_balance, 0) AS vs_balance
+            m.branch_code, m.samity_code AS m_samity_code, m.field_officer
         FROM active_loans al
         LEFT JOIN members m ON al.id = m.id
         WHERE al.status = 'Active' AND al.company_id = ?
     `;
     let params = [company_id];
 
-    // Officer ফিল্টার - এখন active_loans.officer_code দিয়েই হবে, নাম খোঁজা লাগবে না
     if (officer_code) {
         sql += ` AND (al.officer_code = ? OR m.field_officer = ?)`;
         params.push(officer_code, officer_name);
     }
 
-    // Samity ফিল্টার - দুই টেবিলেই চেক করবে, যেটাতে থাকে সেটাতেই মিলবে
     if (samity_code) {
         sql += ` AND (al.samity_code = ? OR m.samity_code = ?)`;
         params.push(samity_code, samity_code);
@@ -922,12 +908,8 @@ app.get('/api/collection-sheet-full', (req, res) => {
             const sc_balance = Math.round(totalDue - pa_balance);
             const targetToday = parseFloat(row.targetToday) || 0;
             const collected = parseFloat(row.collected) || 0;
-            // 🟢 সংশোধন: আগের বকেয়া - এইটাই Flutter এ previous_due হয়ে যাবে
             const prevArrears = parseFloat(row.accumulatedDue) || 0;
-            // 🟢 সংশোধন: নিউ ডিউ = আজকের কিস্তি, সবসময় ২০০ দেখাবে
             const new_due = targetToday;
-            // 🟢 সংশোধন: ক্লোজিং ডিউ = আগের বকেয়া + নিউ ডিউ - আজকে আদায়
-            // যেমন: ১ম দিন 0+200-0=200, ২য় দিন 200+200-200=200, ৩য় দিন 200+200-400=0
             const closing_due = prevArrears + new_due - collected;
             return {
                 ...row,
@@ -938,12 +920,11 @@ app.get('/api/collection-sheet-full', (req, res) => {
                 loan_collection_sc: Math.round(collected * (1-pa_ratio)),
                 new_due: new_due,
                 closing_due: closing_due,
-                // 🟢 নতুন: Flutter এই নামে খুঁজে
                 previous_due: prevArrears,
                 accumulatedDue: prevArrears,
-                gs_balance: parseFloat(row.gs_balance) || parseFloat(row.totalSavings) || 0,
-                vs_balance: parseFloat(row.vs_balance) || 0,
-                vs_collected: parseFloat(row.vsInput) || 0,
+                gs_balance: parseFloat(row.totalSavings) || 0,
+                vs_balance: 0,
+                vs_collected: 0,
                 loan_pa: pa_balance,
                 loan_sc: sc_balance
             };
