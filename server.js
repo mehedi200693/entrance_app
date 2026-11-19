@@ -1140,7 +1140,23 @@ app.post('/api/loan-disburse', async (req, res) => {
     res.status(500).json({ error: 'Disburse failed: ' + err.message });
   }
 });
+// Final রুমের লিস্ট - খালি Pending রা আসবে
+app.get('/api/get-final-submit-data', (req, res) => {
+  db.query(`SELECT * FROM active_loans WHERE isSavedToday = 'pending' AND company_id = ?`, ['COM101'], (err, results) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(results);
+  });
+});
 
+// Final Submit - Pending -> Final + লক
+app.post('/api/lock-collection', (req, res) => {
+  const { members } = req.body;
+  members.forEach((m) => {
+    db.query(`UPDATE active_loans SET accumulatedDue = ?, totalCollected = totalCollected + ?, isSavedToday = 'true' WHERE id = ?`,
+    [m.closing_due ?? m.accumulatedDue, m.collected || 0, m.id]);
+  });
+  res.json({ message: "লক হয়েছে" });
+});
 
 // ✅ একটাই সার্ভার লিসেন - আগের ডাবল লিসেন বাগ ফিক্স করা হলো
 const PORT = process.env.PORT || 3000;
