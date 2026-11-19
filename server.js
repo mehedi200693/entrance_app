@@ -202,37 +202,51 @@ app.get('/api/print-financial-report', async (req, res) => {
 });
 
 // 💾 ৪. কালেকশন শিটের অফলাইন/ড্রাফট সাবমিট
-app.post('/api/save-draft-collection', (req, res) => {
-    const { members } = req.body;
-    if (!members || members.length === 0) return res.status(400).json({ error: "পর্যাপ্ত ডাটা নেই!" });
+app.post('/api/save-draft-collection', async (req, res) => {
+  const { members } = req.body;
+  if (!members || members.length === 0) {
+    return res.status(400).json({ error: "পর্যাপ্ত ডাটা নেই!" });
+  }
 
-    let completedQueries = 0;
-    let hasError = false;
+  try {
+    for (const member of members) {
+      const kisti = parseFloat(member.collected || 0);
+      const sanchay = parseFloat(member.savingsInput || 0);
 
-    members.forEach((member) => {
-        const kisti = parseFloat(member.collected || member.installment_collected || 0);
-        const sanchay = parseFloat(member.savingsInput || member.savings_collected || 0);
-        const closingDue = member.closing_due !== undefined ? parseFloat(member.closing_due) : parseFloat(member.accumulatedDue || 0);
-
-        const sql = `UPDATE active_loans SET collected = ?, savingsInput = ?, accumulatedDue = ?, isSavedToday = 'true' WHERE id = ?`;
-        db.query(sql, [kisti, sanchay, closingDue, member.id], (err) => {
-            if (err) hasError = true;
-            completedQueries++;
-            if (completedQueries === members.length) {
-                if (hasError) return res.status(500).json({ error: "কিছু সদস্যের ডাটা সেভ করা যায়নি!" });
-                res.status(200).json({ message: "সচলভাবে সেভ হয়েছে!" });
-            }
-        });
-    });
+      // isSavedToday যদি VARCHAR হয় তবেই 'pending' চলবে
+      const sql = `UPDATE active_loans SET collected = ?, savingsInput = ?, isSavedToday = 'pending' WHERE id = ?`;
+      await db.query(sql, [kisti, sanchay, member.id]);
+    }
+    res.status(200).json({ message: "Pending হয়েছে!" });
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ error: "কিছু সদস্যের ডাটা সেভ করা যায়নি!" });
+  }
 });
+app.post('/api/final-submit-collection', async (req, res) => {
+  const { members } = req.body;
+  if (!members || members.length === 0) {
+    return res.status(400).json({ error: "পর্যাপ্ত ডাটা নেই!" });
+  }
 
-// 📥 ৫. ফাইনাল সাবমিট রুমে ডাটা আনার API 
-app.get('/api/get-final-submit-data', (req, res) => {
-    const sql = `SELECT * FROM active_loans WHERE status = 'Active' AND (isSavedToday = 'true' OR isSavedToday = 'locked')`;
-    db.query(sql, (err, results) => {
-        if (err) return res.status(500).json({ error: "ডাটা আনতে সমস্যা হয়েছে!" });
-        res.status(200).json(sanitizeData(results));
-    });
+  try {
+    for (const member of members) {
+      const kisti = parseFloat(member.collected || 0);
+      const sanchay = parseFloat(member.savingsInput || 0);
+      const closingDue = parseFloat(member.closing_due ?? member.accumulatedDue ?? 0);
+
+      // ✅ Final - এখন বকেয়া ফাইনাল + লক + মোট আদায়ে যোগ
+      const sql = `UPDATE active_loans SET collected = ?, savingsInput = ?, accumulatedDue = ?, totalCollected = totalCollected + ?, isSavedToday = 'true' WHERE id = ?`;
+
+      await db.query(sql, [kisti, sanchay, closingDue, kisti, member.id]);
+    }
+
+    res.status(200).json({ message: "Final Submit হয়ে লক হয়েছে!" });
+
+  } catch (err) {
+    console.log(err);
+    res.status(500).json({ error: "কিছু সদস্যের ডাটা সেভ করা যায়নি!" });
+  }
 });
 
 // 💸 ৬. সঞ্চয় উত্তোলন (Withdraw) API 
@@ -363,7 +377,11 @@ app.post('/api/next-day-update', async (req, res) => {
   try {
     let { company_id, next_date } = req.body;
     let cid = company_id || '101';
-
+    await db.query('START TRANSACTION');
+    await db.query("UPDATE active_loans SET accumulatedDue = GREATEST(0, accumulatedDue + targetToday - collected) WHERE status = 'Active' AND company_id = ?", [cid]);
+    await db.query("UPDATE active_loans SET totalCollected = totalCollected + collected, collected = 0, savingsInput = 0, isSavedToday = 'false' WHERE company_id = ?", [cid]);
+    await db.query("DELETE FROM final_collection_submits WHERE company_id = ?", [cid]);
+    await db.query('COMMIT');
     const checkCurrentDateSql = "SELECT DATE_FORMAT(system_date, '%Y-%m-%d') as current_system_date FROM system_settings WHERE company_id = ?";
     const [checkResults] = await db.query(checkCurrentDateSql, [cid]);
 
@@ -396,9 +414,11 @@ app.post('/api/next-day-update', async (req, res) => {
     }
 
     await db.query(updateDateSql, params);
+    await db.query('COMMIT');
     return res.status(200).json({ message: 'সফলভাবে ডে-এন্ড সম্পন্ন হয়েছে' });
 
   } catch (err) {
+    await db.query('ROLLBACK');
     console.log("next-day-update error:", err);
     return res.status(500).json({ error: 'তারিখ আপডেটে ব্যর্থ' });
   }
@@ -911,6 +931,15 @@ app.get('/api/collection-sheet-full', (req, res) => {
             const prevArrears = parseFloat(row.accumulatedDue) || 0;
             const new_due = targetToday;
             const closing_due = prevArrears + new_due - collected;
+            const savingsInput = parseFloat(row.savingsInput) || 0;
+            const gs_balance = parseFloat(row.totalSavings) || 0;
+            const vs_balance = 0;
+            const vs_collected = 0;
+            const loan_pa = pa_balance;
+            const loan_sc = sc_balance;
+            const accumulatedDue = prevArrears;
+            const totalCollected = parseFloat(row.totalCollected) || 0;
+            const total_balance = totalDue - totalCollected;
             return {
                 ...row,
                 pa_balance: pa_balance,
