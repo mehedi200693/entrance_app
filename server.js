@@ -36,8 +36,8 @@ db.getConnection()
 const sanitizeData = (results) => {
     return results.map(row => ({
         ...row,
-        collected: (row.collected == null || row.collected == 0) ? (row.targetToday ?? 0) : row.collected,
-        savingsInput: (row.savingsInput == null || row.savingsInput == 0) ? (row.savingsTarget ?? 0) : row.savingsInput,
+        collected: row.collected ?? 0,
+        savingsInput: row.savingsInput ??0,
         targetToday: row.targetToday ?? 0,
         savingsTarget: row.savingsTarget ?? 0,
         totalSavings: row.totalSavings ?? 0,
@@ -92,7 +92,7 @@ app.get('/api/get-system-date', async (req, res) => {
 
 // 📥 ৩. কালেকশন শিট ডাটা API
 app.get('/api/get-collection-data', async (req, res) => {
-    const sql = "SELECT * FROM active_loans WHERE status = 'Active' AND isSavedToday = 'false'";
+    const sql = "SELECT * FROM active_loans WHERE status = 'Active'";
     try {
         const [results] = await db.query(sql);
         
@@ -281,146 +281,40 @@ app.get('/api/loan/history-filtered', (req, res) => {
     });
 });
 
-// ৮. ফাইনাল অনলাইন সাবমিট ও বকেয়া হিসাবের মাস্টার API
-app.post('/api/lock-collection', (req, res) => {
-    const { members, date, company_id } = req.body;
-    const cid = company_id || 'COM101'; 
-
-    const getDateSql = "SELECT DATE_FORMAT(system_date, '%Y-%m-%d') as s_date FROM system_settings WHERE company_id = ?";
-
-    db.query(getDateSql, [cid], (dateErr, dateResults) => {
-        let safeDate;
-        if (dateErr || dateResults.length === 0) {
-            safeDate = date || new Date().toISOString().split('T')[0];
-        } else {
-            safeDate = dateResults[0].s_date; 
-        }
-
-        const memberIds = members.map(m => m.id);
-        if (memberIds.length === 0) return res.status(200).json({ message: "কোন সদস্য নেই!" });
-
-        const checkLockedSql = "SELECT id, isSavedToday FROM active_loans WHERE id IN (?)";
-        db.query(checkLockedSql, [memberIds], (checkErr, dbMembers) => {
-            if (checkErr) return res.status(500).json({ error: "ডাটাবেজ চেকিং এরর!" });
-
-            const pendingMembers = members.filter(frontendMember => {
-                const dbMember = dbMembers.find(m => m.id === frontendMember.id);
-                return dbMember && dbMember.isSavedToday !== 'locked'; 
-            });
-
-            if (pendingMembers.length === 0) {
-                return res.status(200).json({ message: "এই সদস্যগুলো আগেই সাবমিট করা হয়েছে।" });
-            }
-
-            let actual_new_collection = 0;
-            let actual_new_savings = 0;
-
-            pendingMembers.forEach(m => {
-                actual_new_collection += parseFloat(m.collected || 0);
-                actual_new_savings += parseFloat(m.savingsInput || 0);
-            });
-
-            const topSheetSql = `INSERT INTO daily_top_sheets (company_id, date, total_collection, total_savings) 
-                                 VALUES (?, ?, ?, ?) 
-                                 ON DUPLICATE KEY UPDATE 
-                                 total_collection = total_collection + VALUES(total_collection), 
-                                 total_savings = total_savings + VALUES(total_savings)`;
-            
-            db.query(topSheetSql, [cid, safeDate, actual_new_collection, actual_new_savings], (topErr) => {
-                if (topErr) return res.status(500).json({ error: "টপশিট এরর।" });
-
-                let completedQueries = 0;
-                let hasError = false;
-
-                pendingMembers.forEach((member) => {
-                    const kisti = parseFloat(member.collected || 0);
-                    const sanchay = parseFloat(member.savingsInput || 0);
-                    const targetToday = parseFloat(member.targetToday || 0);
-                    const todaysDue = targetToday > kisti ? (targetToday - kisti) : 0; 
-
-                    const updateMemberSql = `UPDATE active_loans 
-                                             SET totalSavings = totalSavings + ?, 
-                                                 totalDue = totalDue - ?, 
-                                                 accumulatedDue = accumulatedDue + ?,
-                                                 isSavedToday = 'locked', 
-                                                 type = (CASE WHEN (totalDue - ?) <= 0 THEN 'Savings Only' ELSE type END)
-                                             WHERE id = ?`;
-                    
-                    db.query(updateMemberSql, [sanchay, kisti, todaysDue, kisti, member.id], (err, updateResult) => {
-                        if (err) hasError = true;
-                        
-                        if (updateResult && updateResult.affectedRows > 0) {
-                            const histSql = "INSERT INTO loan_history (member_id, date, type, collected, savings, balance_effect) VALUES (?, ?, 'নিয়মিত আদায়', ?, ?, ?)";
-                            db.query(histSql, [member.id, safeDate, kisti, sanchay, `+৳${kisti + sanchay}`], () => {
-                                checkAndFinish();
-                            });
-                        } else {
-                            checkAndFinish();
-                        }
-
-                        function checkAndFinish() {
-                            completedQueries++;
-                            if (completedQueries === pendingMembers.length) {
-                                if (hasError) return res.status(500).json({ error: "কিছু ডাটা প্রসেস করা যায়নি!" });
-                                res.status(200).json({ message: "নতুন কালেকশন ফাইনাল সাবমিট হয়েছে!" });
-                            }
-                        }
-                    });
-                });
-            });
-        });
-    });
-});
-
 // 🔄 ৯. পরবর্তী দিন আপডেট
 app.post('/api/next-day-update', async (req, res) => {
   try {
     let { company_id, next_date } = req.body;
-    let cid = company_id || '101';
+    let cid = company_id || 'COM101'; // ✅ 101 না, COM101
+
     await db.query('START TRANSACTION');
-    await db.query("UPDATE active_loans SET accumulatedDue = GREATEST(0, accumulatedDue + targetToday - collected) WHERE status = 'Active' AND company_id = ?", [cid]);
-    await db.query("UPDATE active_loans SET totalCollected = totalCollected + collected, collected = 0, savingsInput = 0, isSavedToday = 'false' WHERE company_id = ?", [cid]);
-    await db.query("DELETE FROM final_collection_submits WHERE company_id = ?", [cid]);
-    await db.query('COMMIT');
-    const checkCurrentDateSql = "SELECT DATE_FORMAT(system_date, '%Y-%m-%d') as current_system_date FROM system_settings WHERE company_id = ?";
-    const [checkResults] = await db.query(checkCurrentDateSql, [cid]);
 
-    if (checkResults.length === 0) return res.status(404).json({ error: 'সিস্টেম তারিখ পাওয়া যায়নি' });
+    // ✅ বকেয়া খালি ১ বারই যোগ হবে
+    await db.query(`UPDATE active_loans SET accumulatedDue = GREATEST(0, accumulatedDue + targetToday - collected) WHERE status = 'Active' AND company_id = ?`, [cid]);
 
-    const currentSystemDate = checkResults[0].current_system_date;
-    if (next_date) {
-      const currentSec = new Date(currentSystemDate).getTime();
-      const nextSec = new Date(next_date).getTime();
-      if (nextSec <= currentSec) return res.status(400).json({ error: 'ডেট আগের তারিখের হতে পারবে না' });
-    }
+    // totalCollected থাকলে যোগ হবে, না থাকলে Day End আটকাবে না
+    try {
+      await db.query(`UPDATE active_loans SET totalCollected = totalCollected + collected WHERE company_id = ?`, [cid]);
+    } catch (e) { console.log("totalCollected ঘর নাই, স্কিপ"); }
 
-    const updateAbsentSql = "UPDATE active_loans SET accumulatedDue = accumulatedDue + targetToday WHERE isSavedToday = 'false' AND status = 'Active' AND company_id = ?";
-    await db.query(updateAbsentSql, [cid]);
+    await db.query(`UPDATE active_loans SET collected = 0, savingsInput = 0, isSavedToday = 'false' WHERE company_id = ?`, [cid]);
 
-    const resetSheetSql = "UPDATE active_loans SET collected = 0, savingsInput = 0, isSavedToday = 'false' WHERE company_id = ?";
-    await db.query(resetSheetSql, [cid]);
+    // ✅ company_id ছাড়া ডিলিট, কারণ ওই টেবিলে company_id নাই
+    await db.query(`DELETE FROM final_collection_submits`);
 
-    const clearFinalSubmitSql = "DELETE FROM final_collection_submits";
-    await db.query(clearFinalSubmitSql);
-
-    let updateDateSql = '';
-    let params = [];
-    if (next_date) {
-      updateDateSql = "UPDATE system_settings SET system_date = ? WHERE company_id = ?";
-      params = [next_date, cid];
-    } else {
-      updateDateSql = "UPDATE system_settings SET system_date = DATE_ADD(system_date, INTERVAL 1 DAY) WHERE company_id = ?";
-      params = [cid];
-    }
-
+    // তারিখ আপডেট
+    let updateDateSql = next_date
+      ? "UPDATE system_settings SET system_date = ? WHERE company_id = ?"
+      : "UPDATE system_settings SET system_date = DATE_ADD(system_date, INTERVAL 1 DAY) WHERE company_id = ?";
+    let params = next_date ? [next_date, cid] : [cid];
     await db.query(updateDateSql, params);
+
     await db.query('COMMIT');
     return res.status(200).json({ message: 'সফলভাবে ডে-এন্ড সম্পন্ন হয়েছে' });
-
   } catch (err) {
     await db.query('ROLLBACK');
     console.log("next-day-update error:", err);
-    return res.status(500).json({ error: 'তারিখ আপডেটে ব্যর্থ' });
+    return res.status(500).json({ error: 'তারিখ আপডেটে ব্যর্থ: ' + err.message });
   }
 });
 
@@ -944,7 +838,7 @@ app.get('/api/collection-sheet-full', (req, res) => {
                 ...row,
                 pa_balance: pa_balance,
                 sc_balance: sc_balance,
-                total_balance: totalDue,
+                total_balance: totalDue - totalCollected,
                 loan_collection_pa: Math.round(collected * pa_ratio),
                 loan_collection_sc: Math.round(collected * (1-pa_ratio)),
                 new_due: new_due,
@@ -1149,13 +1043,95 @@ app.get('/api/get-final-submit-data', (req, res) => {
 });
 
 // Final Submit - Pending -> Final + লক
-app.post('/api/lock-collection', (req, res) => {
-  const { members } = req.body;
-  members.forEach((m) => {
-    db.query(`UPDATE active_loans SET accumulatedDue = ?, totalCollected = totalCollected + ?, isSavedToday = 'true' WHERE id = ?`,
-    [m.closing_due ?? m.accumulatedDue, m.collected || 0, m.id]);
-  });
-  res.json({ message: "লক হয়েছে" });
+app.post('/api/lock-collection', async (req, res) => {
+  const { members, date, company_id } = req.body;
+  const cid = company_id || 'COM101';
+
+  if (!members || members.length === 0) {
+    return res.status(200).json({ message: "কোন সদস্য নেই!" });
+  }
+
+  // db.promise() ব্যবহার করো, তাহলে await কাজ করবে
+  const conn = await db.promise().getConnection();
+  
+  try {
+    await conn.beginTransaction();
+
+    // 1. Safe Date নাও
+    const [dateRows] = await conn.query(
+      "SELECT DATE_FORMAT(system_date, '%Y-%m-%d') as s_date FROM system_settings WHERE company_id = ?",
+      [cid]
+    );
+    const safeDate = dateRows.length > 0 ? dateRows[0].s_date : (date || new Date().toISOString().split('T')[0]);
+
+    // 2. কারা already locked চেক করো
+    const memberIds = members.map(m => m.id);
+    const [dbMembers] = await conn.query(
+      "SELECT id, isSavedToday FROM active_loans WHERE id IN (?)",
+      [memberIds]
+    );
+
+    const pendingMembers = members.filter(fm => {
+      const dbM = dbMembers.find(m => m.id === fm.id);
+      return dbM && dbM.isSavedToday !== 'locked';
+    });
+
+    if (pendingMembers.length === 0) {
+      await conn.rollback();
+      return res.status(200).json({ message: "এই সদস্যগুলো আগেই সাবমিট করা হয়েছে।" });
+    }
+
+    let totalCollection = 0;
+    let totalSavings = 0;
+
+    // 3. প্রতিটা মেম্বার আপডেট করো
+    for (const member of pendingMembers) {
+      const kisti = parseFloat(member.collected || 0);
+      const sanchay = parseFloat(member.savingsInput || 0);
+      const targetToday = parseFloat(member.targetToday || 0);
+      const todaysDue = targetToday > kisti ? (targetToday - kisti) : 0;
+
+      totalCollection += kisti;
+      totalSavings += sanchay;
+
+      await conn.query(
+        `UPDATE active_loans SET 
+           totalSavings = totalSavings + ?,
+           totalCollected = totalCollected + ?,
+           totalDue = GREATEST(totalDue - ?, 0),
+           accumulatedDue = accumulatedDue + ?,
+           isSavedToday = 'locked',
+           type = (CASE WHEN (totalDue - ?) <= 0 THEN 'Savings Only' ELSE type END)
+         WHERE id = ?`,
+        [sanchay, kisti, kisti, todaysDue, kisti, member.id]
+      );
+
+      await conn.query(
+        "INSERT INTO loan_history (member_id, date, type, collected, savings, balance_effect) VALUES (?, ?, 'নিয়মিত আদায়', ?, ?, ?)",
+        [member.id, safeDate, kisti, sanchay, `+৳${kisti + sanchay}`]
+      );
+    }
+
+    // 4. সব ঠিক থাকলে তবেই টপশিট আপডেট করো
+    await conn.query(
+      `INSERT INTO daily_top_sheets (company_id, date, total_collection, total_savings) 
+       VALUES (?, ?, ?, ?) 
+       ON DUPLICATE KEY UPDATE 
+       total_collection = total_collection + VALUES(total_collection), 
+       total_savings = total_savings + VALUES(total_savings)`,
+      [cid, safeDate, totalCollection, totalSavings]
+    );
+
+    await conn.commit();
+    res.status(200).json({ message: "নতুন কালেকশন ফাইনাল সাবমিট হয়েছে!" });
+
+  } catch (err) {
+    await conn.rollback();
+    console.error(err);
+    res.status(500).json({ error: "সাবমিট ফেইল করেছে, কোনো ডাটা সেভ হয়নি!" });
+  } finally {
+    conn.release();
+  }
 });
 
 // ✅ একটাই সার্ভার লিসেন - আগের ডাবল লিসেন বাগ ফিক্স করা হলো
