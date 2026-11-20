@@ -299,9 +299,9 @@ app.post('/api/day-end', async (req, res) => {
     if (currDate) {
       let c = new Date(currDate); let n = new Date(isoDate);
       let diffDays = Math.round((n - c) / (1000*60*60*24));
-      if (diffDays !== 1) {
+      if (diffDays < 1) {
         await db.query('ROLLBACK');
-        return res.status(400).json({ success: false, error: 'পরের তারিখই হইতে হবে! এখন আছে ' + currDate });
+        return res.status(400).json({ success: false, error: 'পরের তারিখই হইতে হবে! এখন আছে ' });
       }
     }
 
