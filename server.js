@@ -282,60 +282,46 @@ app.get('/api/loan/history-filtered', (req, res) => {
 });
 
 // 🔄 ৯. পরবর্তী দিন আপডেট
-app.post('/api/next-day-update', async (req, res) => {
+// Flutter /api/day-end ডাকে, তাই এই নামেও চালু রাখতে হবে
+app.post('/api/day-end', async (req, res) => {
   try {
     let { company_id, next_date } = req.body;
     let cid = company_id || 'COM101';
+
+    // ✅ তারিখটা হাতে ভেঙে নেওয়া - "2026-11-03" / "3-11-2026" ২টাই চলবে
+    let parts = String(next_date).split('-');
+    let isoDate = parts[0].length === 4 ? next_date : `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
+
     await db.query('START TRANSACTION');
 
-    // ✅ ১. তারিখ চেক - ১ দিন আগেই যাইতে হবে, ডাবল Day End হবে না
     let [sysRows] = await db.query(`SELECT system_date FROM system_settings WHERE company_id = ?`, [cid]);
     let currDate = sysRows[0]?.system_date;
-    if (currDate && next_date) {
-      let c = new Date(currDate); let n = new Date(next_date);
+    if (currDate) {
+      let c = new Date(currDate); let n = new Date(isoDate);
       let diffDays = Math.round((n - c) / (1000*60*60*24));
       if (diffDays !== 1) {
         await db.query('ROLLBACK');
-        return res.status(400).json({ success: false, error: 'পরের তারিখই হইতে হবে!' });
+        return res.status(400).json({ success: false, error: 'পরের তারিখই হইতে হবে! এখন আছে ' + currDate });
       }
     }
 
-    // ✅ ২. আপনার হিসাব - বকেয়া সবার জন্য, Submit দিছে কি দেয় নাই দেখা হবে না
-    // ৫০ জন দেয় নাই -> 0 + 100 - 0 = 100 বকেয়া
-    // ৫০ জন দিছে -> 0 + 100 - 100 = 0 বকেয়া (কারেন্ট)
-    // একজন 500 এর মধ্যে 300 দিছে -> 0 + 500 - 300 = 200 বকেয়া
+    // ✅ বকেয়া সবার জন্য - আপনার হিসাব
     await db.query(`UPDATE active_loans SET accumulatedDue = GREATEST(0, accumulatedDue + targetToday - collected) WHERE status = 'Active' AND company_id = ? AND targetToday > 0`, [cid]);
-
-    // ✅ ৩. সঞ্চয় উধাও হবে না - আগে ব্যালেন্সে যোগ
     try { await db.query(`UPDATE active_loans SET totalSavings = totalSavings + savingsInput WHERE company_id = ?`, [cid]); } catch(e) {}
-    try { await db.query(`UPDATE active_loans SET vs_balance = vs_balance + vsInput WHERE company_id = ?`, [cid]); } catch(e) {}
-    try { await db.query(`UPDATE active_loans SET totalCollected = totalCollected + collected WHERE company_id = ?`, [cid]); } catch(e) {}
-
-    // ✅ ৪. লোন ব্যালেন্স কমবে
     await db.query(`UPDATE active_loans SET totalDue = GREATEST(0, totalDue - collected) WHERE company_id = ?`, [cid]);
-
-    // ✅ ৫. কালকের জন্য খালি আজকের আদায় 0 হবে, টার্গেট 0 হবে না
-    // collected = 0, savingsInput = 0, vsInput = 0 হবে
-    // targetToday, savingsTarget আগের মতোই থাকবে - 100 টাকা, 50 টাকা
+    // ✅ খালি আদায় 0 হবে, টার্গেট 0 হবে না
     await db.query(`UPDATE active_loans SET collected = 0, savingsInput = 0, vsInput = 0, isSavedToday = 'false' WHERE company_id = ?`, [cid]);
+    // ✅ WP 120 ওভার হইলে খালি তখন টার্গেট 0
+    await db.query(`UPDATE active_loans SET targetToday = 0 WHERE company_id = ? AND status = 'Active' AND DATEDIFF(?, disburseDate) >= 120`, [cid, isoDate]);
 
-    // ✅ ৬. WP ১২০ দিন ওভার হইলে খালি তখন টার্গেট 0 হবে, বকেয়া ফিক্সড থাকবে
-    await db.query(`UPDATE active_loans SET targetToday = 0 WHERE company_id = ? AND status = 'Active' AND DATEDIFF(?, disburseDate) >= 120`, [cid, next_date]);
-
-    let updateDateSql = next_date
-      ? "UPDATE system_settings SET system_date = ? WHERE company_id = ?"
-      : "UPDATE system_settings SET system_date = DATE_ADD(system_date, INTERVAL 1 DAY) WHERE company_id = ?";
-    let params = next_date ? [next_date, cid] : [cid];
-    await db.query(updateDateSql, params);
-
+    await db.query(`UPDATE system_settings SET system_date = ? WHERE company_id = ?`, [isoDate, cid]);
     await db.query('COMMIT');
-    return res.status(200).json({ success: true, message: 'সফলভাবে ডে-এন্ড সম্পন্ন হয়েছে' });
+    return res.status(200).json({ success: true, message: 'Day End হইছে' });
   } catch (err) {
     await db.query('ROLLBACK');
-    return res.status(500).json({ success: false, error: 'তারিখ আপডেটে ব্যর্থ: ' + err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
-
 // 🛠️ ১০. ডে-এন্ড ছাড়াই এমার্জেন্সি সিস্টেম ডেট পরিবর্তনের জন্য
 app.post('/api/set-system-date', (req, res) => {
     const { company_id, target_date } = req.body; 
