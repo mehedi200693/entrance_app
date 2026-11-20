@@ -306,7 +306,6 @@ app.post('/api/day-end', async (req, res) => {
     }
 
     // ✅ বকেয়া সবার জন্য - আপনার হিসাব
-    await db.query(`UPDATE active_loans SET accumulatedDue = GREATEST(0, accumulatedDue + targetToday - collected) WHERE status = 'Active' AND company_id = ? AND targetToday > 0`, [cid]);
     try { await db.query(`UPDATE active_loans SET totalSavings = totalSavings + savingsInput WHERE company_id = ?`, [cid]); } catch(e) {}
     await db.query(`UPDATE active_loans SET totalDue = GREATEST(0, totalDue - collected) WHERE company_id = ?`, [cid]);
     // ✅ খালি আদায় 0 হবে, টার্গেট 0 হবে না
