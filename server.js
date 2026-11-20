@@ -285,24 +285,43 @@ app.get('/api/loan/history-filtered', (req, res) => {
 app.post('/api/next-day-update', async (req, res) => {
   try {
     let { company_id, next_date } = req.body;
-    let cid = company_id || 'COM101'; // ✅ 101 না, COM101
-
+    let cid = company_id || 'COM101';
     await db.query('START TRANSACTION');
 
-    // ✅ বকেয়া খালি ১ বারই যোগ হবে
-    await db.query(`UPDATE active_loans SET accumulatedDue = GREATEST(0, accumulatedDue + targetToday - collected) WHERE status = 'Active' AND company_id = ?`, [cid]);
+    // ✅ ১. তারিখ চেক - ১ দিন আগেই যাইতে হবে, ডাবল Day End হবে না
+    let [sysRows] = await db.query(`SELECT system_date FROM system_settings WHERE company_id = ?`, [cid]);
+    let currDate = sysRows[0]?.system_date;
+    if (currDate && next_date) {
+      let c = new Date(currDate); let n = new Date(next_date);
+      let diffDays = Math.round((n - c) / (1000*60*60*24));
+      if (diffDays !== 1) {
+        await db.query('ROLLBACK');
+        return res.status(400).json({ success: false, error: 'পরের তারিখই হইতে হবে!' });
+      }
+    }
 
-    // totalCollected থাকলে যোগ হবে, না থাকলে Day End আটকাবে না
-    try {
-      await db.query(`UPDATE active_loans SET totalCollected = totalCollected + collected WHERE company_id = ?`, [cid]);
-    } catch (e) { console.log("totalCollected ঘর নাই, স্কিপ"); }
+    // ✅ ২. আপনার হিসাব - বকেয়া সবার জন্য, Submit দিছে কি দেয় নাই দেখা হবে না
+    // ৫০ জন দেয় নাই -> 0 + 100 - 0 = 100 বকেয়া
+    // ৫০ জন দিছে -> 0 + 100 - 100 = 0 বকেয়া (কারেন্ট)
+    // একজন 500 এর মধ্যে 300 দিছে -> 0 + 500 - 300 = 200 বকেয়া
+    await db.query(`UPDATE active_loans SET accumulatedDue = GREATEST(0, accumulatedDue + targetToday - collected) WHERE status = 'Active' AND company_id = ? AND targetToday > 0`, [cid]);
 
-    await db.query(`UPDATE active_loans SET collected = 0, savingsInput = 0, isSavedToday = 'false' WHERE company_id = ?`, [cid]);
+    // ✅ ৩. সঞ্চয় উধাও হবে না - আগে ব্যালেন্সে যোগ
+    try { await db.query(`UPDATE active_loans SET totalSavings = totalSavings + savingsInput WHERE company_id = ?`, [cid]); } catch(e) {}
+    try { await db.query(`UPDATE active_loans SET vs_balance = vs_balance + vsInput WHERE company_id = ?`, [cid]); } catch(e) {}
+    try { await db.query(`UPDATE active_loans SET totalCollected = totalCollected + collected WHERE company_id = ?`, [cid]); } catch(e) {}
 
-    // ✅ company_id ছাড়া ডিলিট, কারণ ওই টেবিলে company_id নাই
-    await db.query(`DELETE FROM final_collection_submits`);
+    // ✅ ৪. লোন ব্যালেন্স কমবে
+    await db.query(`UPDATE active_loans SET totalDue = GREATEST(0, totalDue - collected) WHERE company_id = ?`, [cid]);
 
-    // তারিখ আপডেট
+    // ✅ ৫. কালকের জন্য খালি আজকের আদায় 0 হবে, টার্গেট 0 হবে না
+    // collected = 0, savingsInput = 0, vsInput = 0 হবে
+    // targetToday, savingsTarget আগের মতোই থাকবে - 100 টাকা, 50 টাকা
+    await db.query(`UPDATE active_loans SET collected = 0, savingsInput = 0, vsInput = 0, isSavedToday = 'false' WHERE company_id = ?`, [cid]);
+
+    // ✅ ৬. WP ১২০ দিন ওভার হইলে খালি তখন টার্গেট 0 হবে, বকেয়া ফিক্সড থাকবে
+    await db.query(`UPDATE active_loans SET targetToday = 0 WHERE company_id = ? AND status = 'Active' AND DATEDIFF(?, disburseDate) >= 120`, [cid, next_date]);
+
     let updateDateSql = next_date
       ? "UPDATE system_settings SET system_date = ? WHERE company_id = ?"
       : "UPDATE system_settings SET system_date = DATE_ADD(system_date, INTERVAL 1 DAY) WHERE company_id = ?";
@@ -310,11 +329,10 @@ app.post('/api/next-day-update', async (req, res) => {
     await db.query(updateDateSql, params);
 
     await db.query('COMMIT');
-    return res.status(200).json({ message: 'সফলভাবে ডে-এন্ড সম্পন্ন হয়েছে' });
+    return res.status(200).json({ success: true, message: 'সফলভাবে ডে-এন্ড সম্পন্ন হয়েছে' });
   } catch (err) {
     await db.query('ROLLBACK');
-    console.log("next-day-update error:", err);
-    return res.status(500).json({ error: 'তারিখ আপডেটে ব্যর্থ: ' + err.message });
+    return res.status(500).json({ success: false, error: 'তারিখ আপডেটে ব্যর্থ: ' + err.message });
   }
 });
 
