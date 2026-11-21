@@ -309,7 +309,7 @@ app.post('/api/day-end', async (req, res) => {
     try { await db.query(`UPDATE active_loans SET totalSavings = totalSavings + savingsInput WHERE company_id = ?`, [cid]); } catch(e) {}
     await db.query(`UPDATE active_loans SET totalDue = GREATEST(0, totalDue - collected) WHERE company_id = ?`, [cid]);
     // ✅ খালি এই ১টা লাইন বসান - টিক না দেওয়া সদস্যের বকেয়া বাড়বে
-await db.query(`UPDATE active_loans SET accumulatedDue = accumulatedDue + targetToday WHERE company_id = ? AND (isSavedToday != 'true' OR isSavedToday IS NULL)`, [cid]);
+    await db.query(`UPDATE active_loans SET accumulatedDue = accumulatedDue + targetToday WHERE company_id = ? AND (isSavedToday != 'true' OR isSavedToday IS NULL)`, [cid]);
     // ✅ খালি আদায় 0 হবে, টার্গেট 0 হবে না
     await db.query(`UPDATE active_loans SET collected = 0, savingsInput = 0, vsInput = 0, isSavedToday = 'false' WHERE company_id = ?`, [cid]);
     // ✅ WP 120 ওভার হইলে খালি তখন টার্গেট 0
