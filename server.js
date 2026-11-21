@@ -790,6 +790,7 @@ app.get('/api/collection-sheet-full', (req, res) => {
     const officer_code = (req.query.officer_code || '').toString();
     const officer_name = (req.query.officer_name || req.query.officer || '').toString();
     const samity_code = (req.query.samity_code || req.query.samity || '').toString().split(' ')[0];
+    const branch_code = (req.query.branch_code || '').toString();
 
     let sql = `
         SELECT 
@@ -804,6 +805,11 @@ app.get('/api/collection-sheet-full', (req, res) => {
         WHERE al.status = 'Active' AND al.company_id = ?
     `;
     let params = [company_id];
+
+    if (branch_code) {
+        sql += ` AND m.branch_code = ?)`;
+        params.push(branch_code);
+    }
 
     if (officer_code) {
         sql += ` AND (al.officer_code = ? OR m.field_officer = ?)`;
