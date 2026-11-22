@@ -807,7 +807,7 @@ app.get('/api/collection-sheet-full', (req, res) => {
     let params = [company_id];
 
     if (branch_code) {
-        sql += ` AND m.branch_code = ?)`;
+        sql += ` AND m.branch_code = ?`;
         params.push(branch_code);
     }
 
