@@ -420,33 +420,126 @@ app.get('/api/members/active-search', async (req, res) => {
 });
 
 // ২. নতুন Loan Proposal জমা দেওয়া
+// ===== ১. Loan Proposal জমা - পুরান স্টাইল (await db.query) + নতুন সব ফিল্ড =====
 app.post('/api/loan-proposals', async (req, res) => {
   try {
-    const { member_id, member_name, branch_code, samity_code, loan_amount, installment_type, total_installments, service_charge_percent, vs_amount, gs_amount } = req.body;
+    const b = req.body;
+
+    // ✅ Validation - পুরানটার মতো
+    if (!b.member_id || !b.branch_code || !b.samity_code) {
+      return res.status(400).json({ error: "Branch / Samity / Member সব লাগবে" });
+    }
+
+    // ✅ পুরান + নতুন ২টার সাথেই চলবে
+    // পুরান Flutter পাঠায় loan_amount, নতুন Flutter পাঠায় proposed_loan_amount
+    const proposedAmt = parseFloat(b.proposed_loan_amount ?? b.loan_amount) || 0;
+    const appliedAmt = parseFloat(b.applied_loan_amount ?? b.loan_amount) || 0;
+
+    // ✅ আপনার পুরান লজিক - Daily / Weekly হিসাব
+    const installment_type = b.installment_type || 'Daily';
+    const service_charge_percent = installment_type === 'Weekly' ? 40 : 20;
+    const total_installments = installment_type === 'Weekly' ? 28 : 120;
+    const totalDue = proposedAmt + (proposedAmt * service_charge_percent / 100);
+    const perInstallment = total_installments > 0 ? totalDue / total_installments : 0;
+
+    // ✅ VS / GS - হাতে লেখা, আপনার পুরান লজিকই
+    const vs_amount = parseFloat(b.vs_amount) || 0;
+    const gs_amount = parseFloat(b.gs_amount) || 0;
+
+    const status = b.recommend_approve === 'Approve' ? 'Approved' : 'Pending';
+
+    // ✅ আপনার পুরান স্টাইল - await db.query
     const [result] = await db.query(
-      `INSERT INTO loan_proposals (member_id, member_name, branch_code, samity_code, loan_amount, installment_type, total_installments, service_charge_percent, vs_amount, gs_amount, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending')`,
-      [member_id, member_name, branch_code, samity_code, loan_amount, installment_type, total_installments, service_charge_percent, vs_amount, gs_amount]
+      `INSERT INTO loan_proposals
+        (company_id, member_id, member_name, branch_code, branch_name, officer_code, officer_name, samity_code, samity_name,
+         category_name, product_name, loan_purpose, installment_type, total_installments, service_charge_percent,
+         total_due, per_installment, loan_amount,
+         applied_loan_amount, applied_date, applied_comment,
+         proposed_loan_amount, proposed_date, proposed_comment, proposed_by,
+         recommend_approve, approved_loan_amount, approval_date, approval_comment, approved_by,
+         recommendation_date, recommended_by,
+         vs_amount, gs_amount,
+         guarantor_branch, guarantor_officer, guarantor_member_id,
+         guarantor_name, guarantor_mobile, guarantor_other_id, guarantor_relation, guarantor_nid, guarantor_ratio, guarantor_smart_id,
+         status, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
+      [
+        b.company_id || 'COM101',
+        b.member_id, b.member_name,
+        b.branch_code, b.branch_name || '',
+        b.officer_code || '', b.officer_name || '',
+        b.samity_code, b.samity_name || '',
+        b.category_name || '', b.product_name || '', b.loan_purpose || '',
+        installment_type, total_installments, service_charge_percent,
+        totalDue, perInstallment, proposedAmt,
+        appliedAmt, b.applied_date || null, b.applied_comment || '',
+        proposedAmt, b.proposed_date || null, b.proposed_comment || '', b.proposed_by || '',
+        b.recommend_approve || 'Please Select',
+        parseFloat(b.approved_loan_amount) || 0, b.approval_date || null, b.approval_comment || '', b.approved_by || '',
+        b.recommendation_date || null, b.recommended_by || '',
+        vs_amount, gs_amount,
+        b.guarantor_branch || '', b.guarantor_officer || '', b.guarantor_member_id || '',
+        b.guarantor_name || '', b.guarantor_mobile || '', b.guarantor_other_id || '',
+        b.guarantor_relation || '', b.guarantor_nid || '', parseFloat(b.guarantor_ratio) || 0, b.guarantor_smart_id || '',
+        status
+      ]
     );
-    res.json({ message: 'Proposal Created', id: result.insertId });
+
+    res.json({ message: 'Proposal Created', id: result.insertId, success: true });
+
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Proposal failed' });
+    res.status(500).json({ error: 'Proposal failed: ' + err.message });
   }
 });
 
-// ৩. সব Proposal এর লিস্ট
+// ===== ২. সব Proposal এর লিস্ট - আপনার পুরানটাই, খালি company_id যোগ করছি =====
 app.get('/api/loan-proposals', async (req, res) => {
   try {
-    const { status } = req.query;
+    const { status, company_id } = req.query;
     let query = "SELECT * FROM loan_proposals WHERE 1=1";
     let params = [];
+    if (company_id) { query += " AND company_id = ?"; params.push(company_id); }
     if (status && status != 'All') { query += " AND status = ?"; params.push(status); }
     query += " ORDER BY created_at DESC";
     const [rows] = await db.query(query, params);
     res.json(rows);
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'Fetch failed' });
+  }
+});
+
+// ===== ৩. Approve / Reject - পুরান স্টাইলে =====
+app.put('/api/loan-proposals/:id/:action', async (req, res) => {
+  try {
+    const { id, action } = req.params;
+    const newStatus = action === 'approve' ? 'Approved' : 'Rejected';
+    const [result] = await db.query(
+      `UPDATE loan_proposals SET status = ? WHERE id = ?`,
+      [newStatus, id]
+    );
+    res.json({ success: true, affected: result.affectedRows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Update failed' });
+  }
+});
+
+// ===== ৪. Samity অনুযায়ী Member - পুরান স্টাইলে await দিয়া =====
+app.get('/api/members/by-samity', async (req, res) => {
+  try {
+    const { branch_code, samity_code, company_id } = req.query;
+    const [rows] = await db.query(
+      `SELECT id, name, phone, guardianName, branch_code, samity_code, field_officer, totalSavings
+       FROM members WHERE branch_code = ? AND samity_code = ? AND company_id = ?
+       ORDER BY CAST(id AS UNSIGNED)`,
+      [branch_code, samity_code, company_id || 'COM101']
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
   }
 });
 
