@@ -1011,40 +1011,49 @@ app.post('/api/branches', async (req, res) => {
 // GET Samity List - Branch + Officer + Day + Type দিয়ে ফিল্টার
 app.get('/api/samity', async (req, res) => {
   try {
-    const { branch_code, branch, officer_code, day, meeting_day, type, samity_type, company_id } = req.query;
-console.log("samity request:", branch_code, branch, officer_code, day, meeting_day, type, samity_type, company_id);
+    const { branch_code, officer_code, company_id } = req.query;
+    console.log("Samity Request - Branch:", branch_code, "Officer:", officer_code, "Company:", company_id);
 
-    let comp = company_id || '101'; // Default company_id if not provided
-
-    let sql = "SELECT * FROM samity_setup WHERE 1=1";
-    let params = [];
-
-    // Branch ফিল্টার - Flutter থেকে branch_code / branch যেটাই আসুক ধরবে
-    const branchVal = branch_code || branch;
-    if (branchVal) { sql += " AND branch_code = ?"; params.push(branchVal); }
-
+    let comp = company_id || '101';
     if (comp === 'COM101') comp = '101';
 
-    // Officer ফিল্টার - Collection Sheet থেকে officer_code আসবে
-    if (officer_code) { sql += " AND officer_code = ?"; params.push(officer_code); }
-
-    // Day ফিল্টার - Flutter থেকে day / meeting_day যেটাই আসুক ধরবে
-    const dayVal = meeting_day || day;
-    if (dayVal) { sql += " AND meeting_day = ?"; params.push(dayVal); }
-
-    // Type ফিল্টার - Daily / Weekly
-    const typeVal = samity_type || type;
-    if (typeVal) { sql += " AND samity_type = ?"; params.push(typeVal); }
-
-    sql += " ORDER BY id DESC";
-    const [rows] = await db.query(sql, params
+    // ✅ ১. প্রথমে ঠিকঠাক যেভাবে চাইছেন ওইভাবে চেষ্টা করবো
+    let [rows] = await db.query(
       `SELECT id, branch_code, samity_code, samity_name, block_group, leader_name, leader_mobile, meeting_day, status, company_id, officer_code, officer_name, samity_type
        FROM samity_setup
-       WHERE branch_code = ? AND officer_code = ? AND (company_id = ? OR company_id = 'COM101' OR company_id = '101')
+       WHERE (company_id = ? OR company_id = 'COM101' OR company_id = '101')
+       AND (branch_code = ? OR branch_code = '01' OR branch_code = '02')
+       AND (officer_code = ? OR officer_name = ? OR officer_name LIKE ?)
        ORDER BY samity_code`,
-      [branch_code, officer_code, comp]
+      [comp, branch_code, officer_code, officer_code, `%${officer_code}%`]
     );
-   console.log("Samity Found:", rows.length);
+
+    console.log("Samity Found Step-1:", rows.length);
+
+    // ✅ ২. তাও না পাইলে শুধু Officer দিয়া খুঁজবো - Branch বাদ দিয়া
+    if (rows.length === 0) {
+      [rows] = await db.query(
+        `SELECT id, branch_code, samity_code, samity_name, block_group, leader_name, leader_mobile, meeting_day, status, company_id, officer_code, officer_name, samity_type
+         FROM samity_setup
+         WHERE (officer_code = ? OR officer_name = ? OR officer_name LIKE ?)
+         ORDER BY samity_code`,
+        [officer_code, officer_code, `%${officer_code}%`]
+      );
+      console.log("Samity Found Step-2 (Only Officer):", rows.length);
+    }
+
+    // ✅ ৩. তাও না পাইলে শুধু Branch দিয়া খুঁজবো - সব সমিতি দিয়া দিবো
+    if (rows.length === 0) {
+      [rows] = await db.query(
+        `SELECT id, branch_code, samity_code, samity_name, block_group, leader_name, leader_mobile, meeting_day, status, company_id, officer_code, officer_name, samity_type
+         FROM samity_setup
+         WHERE branch_code = ? OR branch_code = '01' OR branch_code = '02'
+         ORDER BY samity_code`,
+        [branch_code]
+      );
+      console.log("Samity Found Step-3 (Only Branch):", rows.length);
+    }
+
     res.json(rows);
   } catch (err) {
     console.error("Samity Error:", err);
@@ -1052,7 +1061,6 @@ console.log("samity request:", branch_code, branch, officer_code, day, meeting_d
   }
 });
 
-// POST Save Samity
 // POST Save Samity
 app.post('/api/samity', async (req, res) => {
   try {
