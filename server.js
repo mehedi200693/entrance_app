@@ -496,18 +496,23 @@ app.post('/api/loan-proposals', async (req, res) => {
 // ===== ২. সব Proposal এর লিস্ট - আপনার পুরানটাই, খালি company_id যোগ করছি =====
 app.get('/api/loan-proposals', async (req, res) => {
   try {
-    const { status, company_id } = req.query;
+    const { status, company_id, branch_code, officer_code, samity_code, category_name, product_name, from_date, to_date, search } = req.query;
     let query = "SELECT * FROM loan_proposals WHERE 1=1";
     let params = [];
     if (company_id) { query += " AND company_id = ?"; params.push(company_id); }
+    if (branch_code) { query += " AND branch_code = ?"; params.push(branch_code); }
+    if (officer_code) { query += " AND officer_code = ?"; params.push(officer_code); }
+    if (samity_code) { query += " AND samity_code = ?"; params.push(samity_code); }
+    if (category_name) { query += " AND category_name = ?"; params.push(category_name); }
+    if (product_name) { query += " AND product_name = ?"; params.push(product_name); }
     if (status && status != 'All') { query += " AND status = ?"; params.push(status); }
+    if (from_date) { query += " AND DATE(created_at) >= ?"; params.push(from_date); }
+    if (to_date) { query += " AND DATE(created_at) <= ?"; params.push(to_date); }
+    if (search) { query += " AND (member_name LIKE ? OR member_id LIKE ? OR loan_purpose LIKE ?)"; params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
     query += " ORDER BY created_at DESC";
     const [rows] = await db.query(query, params);
     res.json(rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Fetch failed' });
-  }
+  } catch (err) { res.status(500).json({ error: 'Fetch failed' }); }
 });
 
 // ===== ৩. Approve / Reject - পুরান স্টাইলে =====
