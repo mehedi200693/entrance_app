@@ -511,7 +511,7 @@ app.get('/api/loan-proposals', async (req, res) => {
         [branch_code, officer_code, comp]
       );
     } else {
-      var [rows] = await db.query(
+      var [rows2] = await db.query(
         `SELECT id, branch_code, samity_code, samity_name, block_group, leader_name, leader_mobile, meeting_day, status, company_id, officer_code, officer_name, samity_type
          FROM samity_setup
          WHERE branch_code = ? AND officer_code = ?
