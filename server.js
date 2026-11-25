@@ -1221,30 +1221,83 @@ app.post('/api/loan-disburse', async (req, res) => {
   try {
     const b = req.body;
     const amount = Number(b.loan_amount || b.disburse_amount || 0);
+    if (amount <= 0) {
+      return res.status(400).json({ error: 'Invalid disburse amount' });
+    }
+
+    // ডুপ্লিকেট Disburse চেক (যদি ইতিমধ্যে Disbursed হয়ে থাকে)
+    if (b.proposal_id) {
+      const [existing] = await db.query(
+        `SELECT status FROM loan_proposals WHERE id = ?`,
+        [b.proposal_id]
+      );
+      if (existing.length > 0 && existing[0].status === 'Disbursed') {
+        return res.status(400).json({ error: 'এই Proposal ইতিমধ্যে Disbursed হয়ে গেছে!' });
+      }
+    }
+
     const type = b.loan_type || b.installment_type || 'Daily';
     const duration = Number(b.duration_month || (type === 'Weekly' ? 7 : 5));
 
     // ✅ আপনার ফাইনাল নিয়ম - Daily: 20% লাভ, 120 কিস্তি | Weekly: 40% লাভ, 28 কিস্তি
     const profitPct = type === 'Weekly' ? 40 : 20;
     const instNo = type === 'Weekly' ? 28 : 120;
-    const totalSC = Math.round(amount * profitPct / 100);
+    const totalSC = Math.round((amount * profitPct) / 100);
     const totalRepay = amount + totalSC;
     const totalInst = Math.round(totalRepay / instNo);
     const principalInst = Math.round(amount / instNo);
     const scInst = Math.round(totalSC / instNo);
-    const welfare = Math.round(amount * 0.01); // ভিডিও: 20000 -> 200
+    const defaultWelfare = Math.round(amount * 0.01); // ভিডিও: 20000 -> 200
+    const finalWelfare =
+      b.welfare_fund !== undefined && b.welfare_fund !== null
+        ? Number(b.welfare_fund)
+        : defaultWelfare;
+
+    // টাইমজোন সেফ তারিখ ফরম্যাটার (YYYY-MM-DD)
+    const toDateStr = (dt) => {
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth() + 1).padStart(2, '0');
+      const d = String(dt.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    };
 
     // ✅ 1st Installment Date: Disburse Date + 2 দিন (ভিডিও: 20-11 -> 22-11)
-    const dDate = new Date(b.disburse_date);
-    const firstDate = new Date(dDate); firstDate.setDate(firstDate.getDate() + 2);
-    const firstStr = firstDate.toISOString().slice(0, 10);
+    const [yr, mo, dy] = String(b.disburse_date).split('-').map(Number);
+    const dDate = new Date(yr, mo - 1, dy);
+    const firstDate = new Date(dDate);
+    firstDate.setDate(firstDate.getDate() + 2);
+    const firstStr = toDateStr(firstDate);
 
     // ১. Disburse টেবিলে ঢুকাবো
     const [r] = await db.query(
       `INSERT INTO loan_disbursements
       (proposal_id, approval_no, member_id, member_name, branch_code, samity_code, loan_name, disburse_amount, duration_month, yearly_sc_rate, total_service_charge, total_repay, installment_type, total_installment_no, total_installment, principal_installment, sc_installment, welfare_fund, savings_balance, share_balance, disburse_date, first_installment_date, transaction_type, status)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'Disbursed')`,
-      [b.proposal_id, b.approval_no || b.proposal_id, b.member_id, b.member_name, b.branch_code || '02', b.samity_code || '', b.loan_name || (type === 'Weekly' ? 'Weekly Loan' : 'Daily Loan 5 Months'), amount, duration, type === 'Weekly' ? 40 : 40, totalSC, totalRepay, type, instNo, totalInst, principalInst, scInst, b.welfare_fund || welfare, b.savings_balance || 0, b.share_balance || 100, b.disburse_date, firstStr, b.transaction_type || 'Cash']
+      [
+        b.proposal_id,
+        b.approval_no || b.proposal_id,
+        b.member_id,
+        b.member_name,
+        b.branch_code || '02',
+        b.samity_code || '',
+        b.loan_name || (type === 'Weekly' ? 'Weekly Loan' : 'Daily Loan 5 Months'),
+        amount,
+        duration,
+        type === 'Weekly' ? 40 : 40,
+        totalSC,
+        totalRepay,
+        type,
+        instNo,
+        totalInst,
+        principalInst,
+        scInst,
+        finalWelfare,
+        Number(b.savings_balance || 0),
+        Number(b.share_balance || 100),
+        b.disburse_date,
+        firstStr,
+        b.transaction_type || 'Cash',
+      ]
     );
     const disbId = r.insertId;
 
@@ -1252,19 +1305,45 @@ app.post('/api/loan-disburse', async (req, res) => {
     let cur = new Date(firstDate);
     for (let i = 1; i <= instNo; i++) {
       // শুক্রবার বাদ - Daily হইলে
-      if (type === 'Daily' && cur.getDay() === 5) { cur.setDate(cur.getDate() + 1); i--; continue; }
+      if (type === 'Daily' && cur.getDay() === 5) {
+        cur.setDate(cur.getDate() + 1);
+        i--;
+        continue;
+      }
       await db.query(
         `INSERT INTO loan_schedules (disbursement_id, proposal_id, member_id, installment_no, installment_date, principal_amount, sc_amount, total_amount) VALUES (?,?,?,?,?,?,?,?)`,
-        [disbId, b.proposal_id, b.member_id, i, cur.toISOString().slice(0, 10), principalInst, scInst, totalInst]
+        [
+          disbId,
+          b.proposal_id,
+          b.member_id,
+          i,
+          toDateStr(cur),
+          principalInst,
+          scInst,
+          totalInst,
+        ]
       );
       cur.setDate(cur.getDate() + (type === 'Weekly' ? 7 : 1));
     }
 
     // ৩. Proposal এর Status Disbursed করবো - যাতে আবার Disburse না হয়
-    try { await db.query(`UPDATE loan_proposals SET status = 'Disbursed' WHERE id = ?`, [b.proposal_id]); } catch (e) {}
+    try {
+      await db.query(`UPDATE loan_proposals SET status = 'Disbursed' WHERE id = ?`, [
+        b.proposal_id,
+      ]);
+    } catch (e) {}
 
-    res.json({ success: true, disbursement_id: disbId, total_repay: totalRepay, total_installment: totalInst, first_installment_date: firstStr });
-  } catch (err) { console.error(err); res.status(500).json({ error: err.message }); }
+    res.json({
+      success: true,
+      disbursement_id: disbId,
+      total_repay: totalRepay,
+      total_installment: totalInst,
+      first_installment_date: firstStr,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
 });
 // Final রুমের লিস্ট - খালি Pending রা আসবে
 app.get('/api/get-final-submit-data', (req, res) => {
