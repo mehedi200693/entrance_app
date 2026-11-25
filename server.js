@@ -545,15 +545,41 @@ app.put('/api/loan-proposals/:id/:action', async (req, res) => {
 app.get('/api/members/by-samity', async (req, res) => {
   try {
     const { branch_code, samity_code, company_id } = req.query;
+    const samityOnly = (samity_code || '').toString().split(' ')[0]; // যদি "S001-XYZ" আসে, শুধু "S001" নাও
+    
+    console.log("Member Request - Branch:", branch_code, "Samity:", samityOnly, "Company:", company_id);
     let comp = company_id || '101';
     if (comp === 'COM101') comp = '101';
-    const [rows] = await db.query(
+
+    let [rows1] = await db.query(
+      `SELECT id, id as member_id, name, name as member_name, phone, phone as mobile, guardianName, guardian_name, branch_code, samity_code, samity_name, field_officer, officer_code, totalSavings, savings, vs_balance, company_id
+       FROM members
+       WHERE (company_id = ? OR company_id = 'COM101' OR company_id = '101')
+       AND (samity_code = ? OR samity_code = ? OR samity_code LIKE ? OR samity_name LIKE ?)
+       ORDER BY CAST(id AS UNSIGNED)`,
+      [comp, samity_code, samityOnly, `${samityOnly}%`, `%${samityOnly}%`]
+    );
+    console.log("Member Found Step-1:", rows1.length);
+
+    if (rows1.length === 0) {
+      [rows2] = await db.query(
+        `SELECT id, id as member_id, name, name as member_name, phone, phone as mobile, guardianName, guardian_name, branch_code, samity_code, samity_name, field_officer, officer_code, totalSavings, savings, vs_balance, company_id
+         FROM members
+         WHERE (company_id = ? OR company_id = 'COM101' OR company_id = '101')
+         AND (branch_code = ? OR branch_code = '01' OR branch_code = '02')
+         ORDER BY CAST(id AS UNSIGNED)`,
+        [comp, branch_code]
+      );
+      console.log("Member Found Step-2 (Only Branch):", rows.length);
+    }
+
+    const [rows2] = await db.query(
       `SELECT id, name, phone, guardianName, branch_code, samity_code, field_officer, totalSavings
        FROM members WHERE branch_code = ? AND samity_code = ? AND company_id = ?
        ORDER BY CAST(id AS UNSIGNED)`,
-      [branch_code, samity_code, comp]
+      [branch_code, samityOnly, comp]
     );
-    res.json(rows);
+    res.json(rows2);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
