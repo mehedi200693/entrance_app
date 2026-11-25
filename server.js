@@ -546,52 +546,61 @@ app.get('/api/members/by-samity', async (req, res) => {
   try {
     const { branch_code, samity_code, company_id } = req.query;
     const samityOnly = (samity_code || '').toString().split(' ')[0];
-
     console.log("Member Request - Branch:", branch_code, "Samity:", samityOnly, "Company:", company_id);
-    let comp = company_id || '101';
-    if (comp === 'COM101') comp = '101';
+
+    // ✅ ১. আগে দেখে নিবো members টেবিলে আসলে কোন কোন কলাম আছে
+    const [cols] = await db.query(`SHOW COLUMNS FROM members`);
+    const colNames = cols.map(c => c.Field);
+    console.log("Members Columns:", colNames);
+
+    const hasCompany = colNames.includes('company_id');
+    const hasBranch = colNames.includes('branch_code');
+    const hasSamity = colNames.includes('samity_code');
+    const hasId = colNames.includes('id');
+
+    const orderBy = hasId ? `ORDER BY CAST(id AS UNSIGNED)` : ``;
+
+    // ✅ ২. যেই কলাম আছে, খালি ওইটা দিয়াই WHERE বানাবো
+    const buildWhere = (useSamity, useBranch) => {
+      let where = `1=1`;
+      let params = [];
+      if (hasCompany) { where += ` AND (company_id = ? OR company_id = 'COM101' OR company_id = '101')`; params.push(company_id || '101'); }
+      if (useSamity && hasSamity) { where += ` AND (samity_code = ? OR samity_code = ? OR samity_code LIKE ?)`; params.push(samity_code, samityOnly, `${samityOnly}%`); }
+      if (useBranch && hasBranch) { where += ` AND (branch_code = ? OR branch_code = '01' OR branch_code = '02')`; params.push(branch_code); }
+      return { where, params };
+    };
 
     // ✅ Step-1: আপনার Logic - Samity দিয়া
-    // ✅ FIX: SELECT * - কোনো কলামের নাম লিখি নাই, তাই samity_name / guardian_name / savings - কোনোটাই আর Unknown column দিবে না
-    let [rows1] = await db.query(
-      `SELECT * FROM members
-       WHERE (company_id = ? OR company_id = 'COM101' OR company_id = '101')
-       AND (samity_code = ? OR samity_code = ? OR samity_code LIKE ?)
-       ORDER BY CAST(id AS UNSIGNED)`,
-      [comp, samity_code, samityOnly, `${samityOnly}%`]
-    );
+    let q1 = buildWhere(true, false);
+    let [rows1] = await db.query(`SELECT * FROM members WHERE ${q1.where} ${orderBy}`, q1.params);
     console.log("Member Found Step-1:", rows1.length);
 
     // ✅ Step-2: আপনার Logic - শুধু Branch দিয়া
     let rows2 = [];
     if (rows1.length === 0) {
-      [rows2] = await db.query(
-        `SELECT * FROM members
-         WHERE (company_id = ? OR company_id = 'COM101' OR company_id = '101')
-         AND (branch_code = ? OR branch_code = '01' OR branch_code = '02')
-         ORDER BY CAST(id AS UNSIGNED)`,
-        [comp, branch_code]
-      );
+      let q2 = buildWhere(false, true);
+      [rows2] = await db.query(`SELECT * FROM members WHERE ${q2.where} ${orderBy}`, q2.params);
       console.log("Member Found Step-2 (Only Branch):", rows2.length);
     }
 
     if (rows1.length > 0) return res.json(rows1);
     if (rows2.length > 0) return res.json(rows2);
 
-    // ✅ Step-3: আপনার Logic - Strict
-    const [rows3] = await db.query(
-      `SELECT * FROM members WHERE branch_code = ? AND samity_code = ? AND company_id = ?
-       ORDER BY CAST(id AS UNSIGNED)`,
-      [branch_code, samityOnly, comp]
-    );
-    console.log("Member Found Step-3 (Strict):", rows3.length);
-    res.json(rows3);
+    // ✅ Step-3: আপনার Logic - খালি Samity + Branch, Company বাদ দিয়া - কারণ Company কলামই নাই
+    let q3 = buildWhere(true, true);
+    // Company থাকলে Step-3 এ Company বাদ দিয়া আবার চেষ্টা করবো
+    if (hasCompany) {
+      let [rows3] = await db.query(`SELECT * FROM members WHERE samity_code = ? ${orderBy}`, [samityOnly]);
+      console.log("Member Found Step-3 (Only Samity):", rows3.length);
+      return res.json(rows3);
+    }
+
+    res.json([]);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
-
 // ৪. Approve / Reject
 app.put('/api/loan-proposals/:id/:action', async (req, res) => {
   try {
