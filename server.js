@@ -545,52 +545,42 @@ app.put('/api/loan-proposals/:id/:action', async (req, res) => {
 app.get('/api/members/by-samity', async (req, res) => {
   try {
     const { branch_code, samity_code, company_id } = req.query;
-    const samityOnly = (samity_code || '').toString().split(' ')[0]; // যদি "S001-XYZ" আসে, শুধু "S001" নাও
+    const samityOnly = (samity_code || '').toString().split(' ')[0];
 
     console.log("Member Request - Branch:", branch_code, "Samity:", samityOnly, "Company:", company_id);
     let comp = company_id || '101';
     if (comp === 'COM101') comp = '101';
 
-    // ✅ Step-1: আপনার Logic - Samity দিয়া খুঁজবো
-    // ✅ FIX ১: guardian_name বাদ দিছি - আপনার টেবিলে এইটা নাই, guardianName ই আছে
+    // ✅ Step-1: আপনার Logic - Samity দিয়া
+    // ✅ FIX: SELECT * - কোনো কলামের নাম লিখি নাই, তাই samity_name / guardian_name / savings - কোনোটাই আর Unknown column দিবে না
     let [rows1] = await db.query(
-      `SELECT id, id as member_id, name, name as member_name, phone, phone as mobile, guardianName, branch_code, samity_code, samity_name, field_officer, officer_code, totalSavings, savings, vs_balance, company_id
-       FROM members
+      `SELECT * FROM members
        WHERE (company_id = ? OR company_id = 'COM101' OR company_id = '101')
-       AND (samity_code = ? OR samity_code = ? OR samity_code LIKE ? OR samity_name LIKE ?)
+       AND (samity_code = ? OR samity_code = ? OR samity_code LIKE ?)
        ORDER BY CAST(id AS UNSIGNED)`,
-      [comp, samity_code, samityOnly, `${samityOnly}%`, `%${samityOnly}%`]
+      [comp, samity_code, samityOnly, `${samityOnly}%`]
     );
     console.log("Member Found Step-1:", rows1.length);
 
-    // ✅ Step-2: আপনার Logic - তাও না পাইলে শুধু Branch দিয়া খুঁজবো
-    // ✅ FIX ২: rows2 আগে let দিয়া ১ বারই ঘোষণা করছি, ২ বার না - আগের Duplicate Error যাবে
+    // ✅ Step-2: আপনার Logic - শুধু Branch দিয়া
     let rows2 = [];
     if (rows1.length === 0) {
       [rows2] = await db.query(
-        `SELECT id, id as member_id, name, name as member_name, phone, phone as mobile, guardianName, branch_code, samity_code, samity_name, field_officer, officer_code, totalSavings, savings, vs_balance, company_id
-         FROM members
+        `SELECT * FROM members
          WHERE (company_id = ? OR company_id = 'COM101' OR company_id = '101')
          AND (branch_code = ? OR branch_code = '01' OR branch_code = '02')
          ORDER BY CAST(id AS UNSIGNED)`,
         [comp, branch_code]
       );
-      // ✅ FIX ৩: আগে ভুলে rows.length লেখা ছিলো, এখন rows2.length - আপনার Log ঠিক হবে
       console.log("Member Found Step-2 (Only Branch):", rows2.length);
     }
 
-    // ✅ FIX ৪: আপনার ৩ নম্বর Query টা রাখছি, কিন্তু এখন ওইটা Step-1 / Step-2 এর পাওয়া ডাটা ফেলবে না
-    // Step-1 এ পাইলে Step-1 ই পাঠাবো, Step-2 এ পাইলে Step-2 ই পাঠাবো, ২টাতেই না পাইলে তখন ৩ নম্বরটা চালাবো
-    if (rows1.length > 0) {
-      return res.json(rows1);
-    }
-    if (rows2.length > 0) {
-      return res.json(rows2);
-    }
+    if (rows1.length > 0) return res.json(rows1);
+    if (rows2.length > 0) return res.json(rows2);
 
+    // ✅ Step-3: আপনার Logic - Strict
     const [rows3] = await db.query(
-      `SELECT id, name, phone, guardianName, branch_code, samity_code, field_officer, totalSavings
-       FROM members WHERE branch_code = ? AND samity_code = ? AND company_id = ?
+      `SELECT * FROM members WHERE branch_code = ? AND samity_code = ? AND company_id = ?
        ORDER BY CAST(id AS UNSIGNED)`,
       [branch_code, samityOnly, comp]
     );
