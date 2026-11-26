@@ -46,17 +46,120 @@ const sanitizeData = (results) => {
     }));
 };
 
+// ✅ Unified Login - Company + (User ID / Username) + Password + Active Status Check
 app.post('/api/login', async (req, res) => {
-    const { username, password } = req.body;
-    const sql = "SELECT company_id, username, name, role FROM users WHERE username = ? AND password = ? AND status = 'Active'";
-    try {
-        const [results] = await db.query(sql, [username, password]);
-        if (results.length === 0) return res.status(401).json({ error: "ইউজার আইডি বা পাসওয়ার্ড ভুল!" });
-        res.status(200).json({ message: "সফল লগইন", user: results[0] });
-    } catch (err) {
-        console.log("Login Database Error: ", err);
-            return res.status(500).json({ error: "সার্ভার এরর: " + err.message });
-        }
+  try {
+    const { company_name, user_id, username, password } = req.body;
+    const loginIdentifier = (user_id || username || '').toString().trim();
+
+    console.log("Login Try:", { company_name, identifier: loginIdentifier });
+
+    // ১. প্রয়োজনীয় ফিল্ড খালি কিনা চেক
+    if (!loginIdentifier || !password) {
+      return res.status(400).json({
+        success: false,
+        error: "ইউজার আইডি এবং পাসওয়ার্ড দিতে হবে!",
+        message: "User ID/Username এবং Password দিতে হবে"
+      });
+    }
+
+    let company = null;
+
+    // ২. কোম্পানি নাম বা কোড দেওয়া থাকলে কোম্পানি যাচাই
+    if (company_name && company_name.toString().trim() !== '') {
+      const cleanCompany = company_name.toString().trim();
+      const [companies] = await db.query(
+        `SELECT * FROM companies 
+         WHERE LOWER(TRIM(company_name)) = LOWER(TRIM(?)) 
+            OR LOWER(TRIM(company_code)) = LOWER(TRIM(?))
+         LIMIT 1`,
+        [cleanCompany, cleanCompany]
+      );
+
+      if (companies.length === 0) {
+        return res.status(401).json({
+          success: false,
+          error: "এই নামে কোনো কোম্পানি নাই!",
+          message: "এই নামে কোনো কোম্পানি নাই"
+        });
+      }
+
+      company = companies[0];
+
+      if (company.is_active == 0 || company.is_active === false) {
+        return res.status(401).json({
+          success: false,
+          error: "এই কোম্পানি বন্ধ আছে!",
+          message: "এই কোম্পানি বন্ধ আছে"
+        });
+      }
+    }
+
+    // ৩. ইউজার খুঁজে বের করা (কোম্পানি থাকলে ওই কোম্পানির ভেতরে, নইলে সরাসরি ইউজার টেবিলে)
+    let userQuery = `SELECT * FROM users WHERE (user_id = ? OR username = ?)`;
+    const queryParams = [loginIdentifier, loginIdentifier];
+
+    if (company) {
+      userQuery += ` AND company_id = ?`;
+      queryParams.push(company.id);
+    }
+
+    userQuery += ` LIMIT 1`;
+
+    const [users] = await db.query(userQuery, queryParams);
+
+    if (users.length === 0) {
+      return res.status(401).json({
+        success: false,
+        error: company ? "এই কোম্পানিতে এই User ID বা Username নাই!" : "ইউজার আইডি বা পাসওয়ার্ড ভুল!",
+        message: company ? "এই কোম্পানিতে এই User Id নাই" : "ইউজার আইডি বা পাসওয়ার্ড ভুল"
+      });
+    }
+
+    const user = users[0];
+
+    // ৪. ইউজার Active কিনা চেক (status কলাম থাকলে)
+    if (user.status && user.status !== 'Active') {
+      return res.status(401).json({
+        success: false,
+        error: "আপনার অ্যাকাউন্টটি Active নয়!",
+        message: "আপনার অ্যাকাউন্টটি Active নয়"
+      });
+    }
+
+    // ৫. পাসওয়ার্ড চেক
+    if (user.password !== password) {
+      return res.status(401).json({
+        success: false,
+        error: "ইউজার আইডি বা পাসওয়ার্ড ভুল!",
+        message: "Password ভুল"
+      });
+    }
+
+    // ৬. সফল লগইন রেসপন্স
+    const responseUser = {
+      id: user.id,
+      user_id: user.user_id || user.username,
+      username: user.username || user.user_id,
+      name: user.name,
+      company_id: company ? company.id : user.company_id,
+      company_name: company ? company.company_name : undefined,
+      role: user.role
+    };
+
+    return res.status(200).json({
+      success: true,
+      message: "সফল লগইন",
+      user: responseUser
+    });
+  } catch (err) {
+    console.error("Login Database Error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "সার্ভার এরর: " + err.message,
+      message: "সার্ভার এরর: " + err.message
+    });
+  }
 });
 
 // 🔢 নতুন সদস্যের সিরিয়াল আইডি তৈরি করার API
