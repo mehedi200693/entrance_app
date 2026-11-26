@@ -1444,6 +1444,60 @@ app.post('/api/lock-collection', async (req, res) => {
     conn.release();
   }
 });
+// ============================================================
+// ✅ Loan Disburse -> Collection Sheet - ফাইনাল ব্লক
+// এই ব্লকটা app.listen এর উপরে বসাবেন
+// ============================================================
+
+// ✅ ১. Disburse হইছে কিনা দেখার API - ব্রাউজারে চেক করবেন
+app.get('/api/loan-disbursements', async (req, res) => {
+  try {
+    const [rows] = await db.query(`SELECT * FROM loan_disbursements ORDER BY id DESC LIMIT 100`);
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ✅ ২. Schedule হইছে কিনা দেখার API
+app.get('/api/loan-schedules', async (req, res) => {
+  try {
+    const { member_id } = req.query;
+    if (member_id) {
+      const [rows] = await db.query(`SELECT * FROM loan_schedules WHERE member_id = ? ORDER BY installment_date`, [member_id]);
+      return res.json(rows);
+    }
+    const [rows] = await db.query(`SELECT * FROM loan_schedules ORDER BY installment_date LIMIT 200`);
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ✅ ৩. Collection Sheet - Disburse এর Schedule থেকেই আনবে
+app.get('/api/collection-sheet', async (req, res) => {
+  try {
+    const { date, branch_code, samity_code } = req.query;
+    const targetDate = date || new Date().toISOString().slice(0, 10);
+
+    // আজকের তারিখের কিস্তি
+    const [byDate] = await db.query(
+      `SELECT s.*, d.member_name, d.branch_code, d.samity_code, d.disburse_amount, d.total_installment
+       FROM loan_schedules s
+       LEFT JOIN loan_disbursements d ON d.id = s.disbursement_id
+       WHERE s.installment_date = ? AND s.status = 'Pending'
+       ORDER BY s.member_id`,
+      [targetDate]
+    );
+
+    // আজকে না থাকলে সব Pending - যাতে খালি না দেখায়
+    const [allPending] = await db.query(
+      `SELECT s.*, d.member_name, d.branch_code, d.samity_code
+       FROM loan_schedules s
+       LEFT JOIN loan_disbursements d ON d.id = s.disbursement_id
+       WHERE s.status = 'Pending'
+       ORDER BY s.installment_date LIMIT 100`
+    );
+
+    res.json({ by_date: byDate, all_pending: allPending, date: targetDate });
+  } catch (err) { console.error(err); res.status(500).json({ error: err.message }); }
+});
 
 // ✅ একটাই সার্ভার লিসেন - আগের ডাবল লিসেন বাগ ফিক্স করা হলো
 const PORT = process.env.PORT || 3000;
